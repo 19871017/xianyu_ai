@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+
+# Build artifacts
+dist/
+build/
+*.spec.bak
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive data
+*.pem
+*.key
+*.db
+*.sqlite
+*.sqlite3
+.env
+secret*
+
+# PyInstaller
+*.manifest
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+
+# Chrome profile
+xf_chrome_profile/
+
+# License data
+.xf_license.json
+.xf_data/

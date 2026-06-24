@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>闲鱼AI助手 - 管理后台</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; }
+        .header { background: #1976d2; color: white; padding: 16px 24px; font-size: 18px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+        .header .logout { cursor: pointer; font-size: 14px; opacity: 0.8; }
+        .header .logout:hover { opacity: 1; }
+        .container { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat-card { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .stat-card h3 { font-size: 14px; color: #666; margin-bottom: 8px; }
+        .stat-card .num { font-size: 28px; font-weight: 700; color: #1976d2; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+        .tab { padding: 8px 20px; background: white; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; font-size: 14px; }
+        .tab.active { background: #1976d2; color: white; border-color: #1976d2; }
+        .tab:hover:not(.active) { background: #f0f0f0; }
+        .table-wrap { background: white; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th { background: #f8f9fa; padding: 10px 12px; text-align: left; border-bottom: 2px solid #e0e0e0; font-weight: 600; }
+        td { padding: 10px 12px; border-bottom: 1px solid #eee; }
+        tr:hover td { background: #f8f9fa; }
+        .status-active { color: #2e7d32; font-weight: 600; }
+        .status-inactive { color: #c62828; font-weight: 600; }
+        .status-expired { color: #e65100; font-weight: 600; }
+        .btn { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .btn-primary { background: #1976d2; color: white; }
+        .btn-primary:hover { background: #1565c0; }
+        .btn-danger { background: #d32f2f; color: white; }
+        .btn-danger:hover { background: #b71c1c; }
+        .btn-success { background: #2e7d32; color: white; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-group { display: flex; gap: 4px; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; }
+        .modal.show { display: flex; align-items: center; justify-content: center; }
+        .modal-box { background: white; border-radius: 8px; padding: 24px; min-width: 400px; max-width: 500px; }
+        .modal-box h3 { margin-bottom: 16px; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; margin-bottom: 4px; font-size: 14px; font-weight: 500; }
+        .form-group input, .form-group select { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        .form-group .hint { font-size: 12px; color: #999; margin-top: 4px; }
+        .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .empty { text-align: center; padding: 40px; color: #999; }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 6px; color: white; font-size: 14px; z-index: 200; opacity: 0; transition: opacity 0.3s; }
+        .toast.show { opacity: 1; }
+        .toast.success { background: #2e7d32; }
+        .toast.error { background: #d32f2f; }
+        .copy-btn { cursor: pointer; color: #1976d2; font-size: 12px; margin-left: 6px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span>闲鱼AI助手 - 管理后台</span>
+        <span class="logout" onclick="logout()">退出登录</span>
+    </div>
+    <div class="container">
+        <div class="stats" id="stats"></div>
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('users')">用户</div>
+            <div class="tab" onclick="switchTab('licenses')">License</div>
+            <div class="tab" onclick="switchTab('devices')">设备</div>
+        </div>
+        <div class="table-wrap">
+            <div id="tab-users">
+                <div style="display:flex;gap:8px;margin-bottom:16px">
+                    <button class="btn btn-success" onclick="showRegisterModal()">注册新用户</button>
+                    <button class="btn btn-primary" onclick="showIssueModal()">签发License</button>
+                </div>
+                <table>
+                    <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+                    <tbody id="users-body"></tbody>
+                </table>
+            </div>
+            <div id="tab-licenses" style="display:none">
+                <button class="btn btn-primary" onclick="showIssueModal()" style="margin-bottom:16px">签发License</button>
+                <table>
+                    <thead><tr><th>ID</th><th>License Key</th><th>用户ID</th><th>到期时间</th><th>状态</th><th>天数</th><th>操作</th></tr></thead>
+                    <tbody id="licenses-body"></tbody>
+                </table>
+            </div>
+            <div id="tab-devices" style="display:none">
+                <table>
+                    <thead><tr><th>ID</th><th>License ID</th><th>机器码</th><th>设备名</th><th>状态</th><th>激活时间</th><th>最后验证</th></tr></thead>
+                    <tbody id="devices-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 注册用户弹窗 -->
+    <div class="modal" id="register-modal">
+        <div class="modal-box">
+            <h3>注册新用户</h3>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="reg-username" placeholder="输入用户名">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="reg-password" placeholder="输入密码">
+            </div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('register-modal')">取消</button>
+                <button class="btn btn-success" onclick="doRegister()">注册</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 签发License弹窗 -->
+    <div class="modal" id="issue-modal">
+        <div class="modal-box">
+            <h3>签发License</h3>
+            <div class="form-group">
+                <label>选择用户</label>
+                <select id="issue-user-id"></select>
+            </div>
+            <div class="form-group">
+                <label>有效天数</label>
+                <input type="number" id="issue-days" value="365">
+            </div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('issue-modal')">取消</button>
+                <button class="btn btn-primary" onclick="doIssue()">签发</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 续期弹窗 -->
+    <div class="modal" id="extend-modal">
+        <div class="modal-box">
+            <h3>续期License</h3>
+            <div class="form-group">
+                <label>License Key</label>
+                <input type="text" id="extend-key" readonly>
+            </div>
+            <div class="form-group">
+                <label>续期天数</label>
+                <input type="number" id="extend-days" value="30">
+            </div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('extend-modal')">取消</button>
+                <button class="btn btn-primary" onclick="doExtend()">续期</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let token = localStorage.getItem('admin_token') || '';
+        let usersCache = [];
+
+        // UTC时间转北京时间
+        function formatTime(utcStr) {
+            if (!utcStr || utcStr === '-') return '-';
+            const d = new Date(utcStr);
+            if (isNaN(d.getTime())) return utcStr;
+            // 转为北京时间 (UTC+8)
+            const beijing = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+            const pad = n => n.toString().padStart(2, '0');
+            return `${beijing.getFullYear()}-${pad(beijing.getMonth()+1)}-${pad(beijing.getDate())} ${pad(beijing.getHours())}:${pad(beijing.getMinutes())}:${pad(beijing.getSeconds())}`;
+        }
+
+        function showToast(msg, type = 'success') {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = `toast ${type} show`;
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        async function api(path, opts = {}) {
+            const res = await fetch(path, {
+                ...opts,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    ...(opts.headers || {})
+                },
+            });
+            if (res.status === 401) {
+                showLogin();
+                throw new Error('unauthorized');
+            }
+            const text = await res.text();
+            try {
+                return JSON.parse(text);
+            } catch {
+                throw new Error(text || `HTTP ${res.status}`);
+            }
+        }
+
+        function showLogin() {
+            const pwd = prompt('请输入管理员密码:');
+            if (!pwd) return;
+            fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: 'admin', password: pwd }),
+            }).then(r => r.json()).then(d => {
+                if (d.access_token) {
+                    token = d.access_token;
+                    localStorage.setItem('admin_token', token);
+                    loadData();
+                } else {
+                    alert('登录失败: ' + JSON.stringify(d));
+                }
+            }).catch(e => alert('登录失败: ' + e));
+        }
+
+        function logout() {
+            token = '';
+            localStorage.removeItem('admin_token');
+            location.reload();
+        }
+
+        async function loadDashboard() {
+            try {
+                const d = await api('/api/admin/dashboard');
+                document.getElementById('stats').innerHTML = [
+                    { label: '用户数', val: d.total_users },
+                    { label: 'License总数', val: d.total_licenses },
+                    { label: '有效License', val: d.active_licenses },
+                    { label: '已过期', val: d.expired_licenses },
+                    { label: '设备总数', val: d.total_devices },
+                    { label: '活跃设备', val: d.active_devices },
+                ].map(s => `<div class="stat-card"><h3>${s.label}</h3><div class="num">${s.val}</div></div>`).join('');
+            } catch (e) { console.error(e); }
+        }
+
+        async function loadUsers() {
+            try {
+                const users = await api('/api/admin/users');
+                usersCache = users;
+                document.getElementById('users-body').innerHTML = users.map(u => `
+                    <tr>
+                        <td>${u.id}</td>
+                        <td>${u.username}</td>
+                        <td>${u.role === 'admin' ? '管理员' : '用户'}</td>
+                        <td class="${u.is_active ? 'status-active' : 'status-inactive'}">${u.is_active ? '正常' : '禁用'}</td>
+                        <td>${formatTime(u.created_at)}</td>
+                        <td><button class="btn btn-primary btn-sm" onclick="showIssueModalForUser(${u.id})">签发</button></td>
+                    </tr>`).join('') || '<tr><td colspan="6" class="empty">暂无数据</td></tr>';
+            } catch (e) { console.error(e); }
+        }
+
+        async function loadLicenses() {
+            try {
+                const ls = await api('/api/admin/licenses');
+                document.getElementById('licenses-body').innerHTML = ls.map(l => {
+                    const expired = new Date(l.expires_at) < new Date();
+                    const status = !l.is_active ? '已吊销' : expired ? '已过期' : '有效';
+                    const cls = !l.is_active ? 'status-inactive' : expired ? 'status-expired' : 'status-active';
+                    return `<tr>
+                        <td>${l.id}</td>
+                        <td style="font-family:monospace;font-size:12px">${l.license_key}<span class="copy-btn" onclick="copyText('${l.license_key}')">复制</span></td>
+                        <td>${l.user_id}</td>
+                        <td>${formatTime(l.expires_at)}</td>
+                        <td class="${cls}">${status}</td>
+                        <td>${l.days}</td>
+                        <td><div class="btn-group">
+                            <button class="btn btn-primary btn-sm" onclick="showExtendModal('${l.license_key}')">续期</button>
+                            ${l.is_active ? `<button class="btn btn-danger btn-sm" onclick="doRevoke('${l.license_key}')">吊销</button>` : ''}
+                        </div></td>
+                    </tr>`;
+                }).join('') || '<tr><td colspan="7" class="empty">暂无数据</td></tr>';
+            } catch (e) { console.error(e); }
+        }
+
+        async function loadDevices() {
+            try {
+                const ds = await api('/api/admin/devices');
+                document.getElementById('devices-body').innerHTML = ds.map(d => `
+                    <tr>
+                        <td>${d.id}</td>
+                        <td>${d.license_id}</td>
+                        <td style="font-size:12px">${d.machine_id}</td>
+                        <td>${d.device_name || '-'}</td>
+                        <td class="${d.is_active ? 'status-active' : 'status-inactive'}">${d.is_active ? '活跃' : '离线'}</td>
+                        <td>${formatTime(d.activated_at)}</td>
+                        <td>${formatTime(d.last_verified)}</td>
+                    </tr>`).join('') || '<tr><td colspan="7" class="empty">暂无数据</td></tr>';
+            } catch (e) { console.error(e); }
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab')[tab === 'users' ? 0 : tab === 'licenses' ? 1 : 2].classList.add('active');
+            document.getElementById('tab-users').style.display = tab === 'users' ? '' : 'none';
+            document.getElementById('tab-licenses').style.display = tab === 'licenses' ? '' : 'none';
+            document.getElementById('tab-devices').style.display = tab === 'devices' ? '' : 'none';
+        }
+        window.switchTab = switchTab;
+
+        function copyText(text) {
+            navigator.clipboard.writeText(text).then(() => showToast('已复制'));
+        }
+
+        function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+        function showRegisterModal() {
+            document.getElementById('reg-username').value = '';
+            document.getElementById('reg-password').value = '';
+            document.getElementById('register-modal').classList.add('show');
+        }
+
+        async function doRegister() {
+            const username = document.getElementById('reg-username').value.trim();
+            const password = document.getElementById('reg-password').value.trim();
+            if (!username || !password) { showToast('请填写完整', 'error'); return; }
+            try {
+                await api('/api/auth/register', {
+                    method: 'POST',
+                    body: JSON.stringify({ username, password })
+                });
+                showToast('注册成功');
+                closeModal('register-modal');
+                loadData();
+            } catch (e) {
+                showToast('注册失败: ' + e.message, 'error');
+            }
+        }
+
+        function showIssueModal() {
+            const select = document.getElementById('issue-user-id');
+            select.innerHTML = usersCache.map(u => `<option value="${u.id}">${u.id} - ${u.username}</option>`).join('');
+            document.getElementById('issue-days').value = '365';
+            document.getElementById('issue-modal').classList.add('show');
+        }
+
+        function showIssueModalForUser(userId) {
+            const select = document.getElementById('issue-user-id');
+            select.innerHTML = usersCache.map(u => `<option value="${u.id}" ${u.id === userId ? 'selected' : ''}>${u.id} - ${u.username}</option>`).join('');
+            document.getElementById('issue-days').value = '365';
+            document.getElementById('issue-modal').classList.add('show');
+        }
+
+        async function doIssue() {
+            const userId = parseInt(document.getElementById('issue-user-id').value);
+            const days = parseInt(document.getElementById('issue-days').value);
+            if (!userId) { showToast('请选择用户', 'error'); return; }
+            if (!days || days <= 0) { showToast('天数必须大于0', 'error'); return; }
+            try {
+                const r = await api('/api/admin/license/issue', {
+                    method: 'POST',
+                    body: JSON.stringify({ user_id: userId, days: days })
+                });
+                showToast('签发成功！Key: ' + r.license_key);
+                copyText(r.license_key);
+                closeModal('issue-modal');
+                loadData();
+            } catch (e) {
+                showToast('签发失败: ' + e.message, 'error');
+            }
+        }
+
+        function showExtendModal(key) {
+            document.getElementById('extend-key').value = key;
+            document.getElementById('extend-days').value = '30';
+            document.getElementById('extend-modal').classList.add('show');
+        }
+
+        async function doExtend() {
+            const key = document.getElementById('extend-key').value;
+            const days = parseInt(document.getElementById('extend-days').value);
+            if (!days || days <= 0) { showToast('天数必须大于0', 'error'); return; }
+            try {
+                await api('/api/admin/license/extend', {
+                    method: 'PUT',
+                    body: JSON.stringify({ license_key: key, days: days })
+                });
+                showToast('续期成功');
+                closeModal('extend-modal');
+                loadData();
+            } catch (e) {
+                showToast('续期失败: ' + e.message, 'error');
+            }
+        }
+
+        async function doRevoke(key) {
+            if (!confirm('确定吊销此License？')) return;
+            try {
+                await api(`/api/license/revoke?license_key=${key}`, { method: 'POST' });
+                showToast('已吊销');
+                loadData();
+            } catch (e) {
+                showToast('吊销失败: ' + e.message, 'error');
+            }
+        }
+
+        async function loadData() {
+            try {
+                await loadDashboard();
+                await loadUsers();
+                await loadLicenses();
+                await loadDevices();
+            } catch (e) { console.error(e); }
+        }
+
+        // 初始化
+        if (!token) { showLogin(); }
+        else { loadData(); setInterval(loadData, 30000); }
+    </script>
+</body>
+</html>
