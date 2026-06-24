@@ -171,9 +171,10 @@ class JDCollector:
                         links.push(h);
                     }
                 });
-                return links;
-            } catch(e) { return []; }
-            """) or []
+                return JSON.stringify(links);
+            } catch(e) { return '[]'; }
+            """) or '[]'
+            raw = json.loads(raw) if isinstance(raw, str) else (raw or [])
 
             new_found = 0
             for link in raw:
