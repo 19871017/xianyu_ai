@@ -135,9 +135,10 @@ class XianyuCollector:
                             result.push(h);
                         }
                     }
-                    return result;
-                } catch(e) { return []; }
-            ''')
+                    return JSON.stringify(result);
+                } catch(e) { return '[]'; }
+            ''') or '[]'
+            item_links = json.loads(item_links) if isinstance(item_links, str) else (item_links or [])
 
             for link in item_links:
                 if link not in seen:
@@ -178,9 +179,10 @@ class XianyuCollector:
                     for(var i=0; i<links.length; i++) {
                         result.push(links[i].href);
                     }
-                    return result;
-                } catch(e) { return []; }
-            ''')
+                    return JSON.stringify(result);
+                } catch(e) { return '[]'; }
+            ''') or '[]'
+            item_links = json.loads(item_links) if isinstance(item_links, str) else (item_links or [])
 
             for link in item_links:
                 if link not in seen:
@@ -400,9 +402,10 @@ class XianyuCollector:
                             }
                         });
                     }
-                    return imgs;
-                } catch(e) { return []; }
-            ''') or []
+                    return JSON.stringify(imgs);
+                } catch(e) { return '[]'; }
+            ''') or '[]'
+            image_urls = json.loads(image_urls) if isinstance(image_urls, str) else []
 
             # URL去重
             seen_urls = set()
