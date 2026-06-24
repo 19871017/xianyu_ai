@@ -122,9 +122,10 @@ class AlibabaCollector:
                             result.push(h);
                         }
                     }
-                    return result;
-                } catch(e) { return []; }
-            ''')
+                    return JSON.stringify(result);
+                } catch(e) { return '[]'; }
+            ''') or '[]'
+            item_links = json.loads(item_links) if isinstance(item_links, str) else (item_links or [])
 
             for link in item_links:
                 if link not in seen:
@@ -272,9 +273,10 @@ class AlibabaCollector:
                             }
                         });
                     }
-                    return imgs.slice(0, 20);
-                } catch(e) { return []; }
-            ''') or []
+                    return JSON.stringify(imgs.slice(0, 20));
+                } catch(e) { return '[]'; }
+            ''') or '[]'
+            image_urls = json.loads(image_urls) if isinstance(image_urls, str) else []
 
             # 下载图片
             item_dir = os.path.join(IMAGE_DIR, "1688_" + sanitize_filename(item_id or title[:20]))
