@@ -9,28 +9,25 @@ DB_PATH = os.path.join(os.path.expanduser("~"), ".xf_data", "data.db")
 
 
 class DatabaseManager:
-    """SQLite数据库管理器 - 商品、订单、采集记录持久化"""
+    """SQLite数据库管理器 - 商品/订单/监控快照/Cookie 持久化"""
 
     def __init__(self):
         self._ensure_db_dir()
         self._init_tables()
 
     def _ensure_db_dir(self):
-        """确保数据库目录存在"""
         db_dir = os.path.dirname(DB_PATH)
         if not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
 
     def _get_conn(self):
-        """获取数据库连接"""
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _init_tables(self):
-        """初始化数据表"""
         with self._get_conn() as conn:
-            # 商品表
+            # ── 商品表 ──
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS products (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +54,7 @@ class DatabaseManager:
                 )
             """)
 
-            # 订单表
+            # ── 订单表 ──
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,7 +75,7 @@ class DatabaseManager:
                 )
             """)
 
-            # 采集记录表
+            # ── 采集记录表 ──
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS collect_records (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,7 +87,7 @@ class DatabaseManager:
                 )
             """)
 
-            # Cookie存储表
+            # ── Cookie 存储表 ──
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS cookies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,14 +97,58 @@ class DatabaseManager:
                 )
             """)
 
+            # ── 【新增】运营监控快照表 ──
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS monitor_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform TEXT NOT NULL,
+                    snapshot_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_logged_in INTEGER DEFAULT 0,
+                    active_listings INTEGER DEFAULT 0,
+                    total_views INTEGER DEFAULT 0,
+                    total_wants INTEGER DEFAULT 0,
+                    total_inquiries INTEGER DEFAULT 0,
+                    pending_orders INTEGER DEFAULT 0,
+                    completed_orders_today INTEGER DEFAULT 0,
+                    completed_orders_30d INTEGER DEFAULT 0,
+                    revenue_today REAL DEFAULT 0.0,
+                    revenue_30d REAL DEFAULT 0.0,
+                    alerts TEXT DEFAULT '[]',
+                    raw_data TEXT DEFAULT '{}',
+                    error TEXT DEFAULT ''
+                )
+            """)
+            # 给老数据库做 migration（字段不存在时 ALTER）
+            self._migrate_monitor_table(conn)
+
             conn.commit()
 
-    # ========== 商品操作 ==========
+    def _migrate_monitor_table(self, conn):
+        """老数据库兼容：monitor_snapshots 若缺少新字段则 ALTER 补充"""
+        try:
+            existing = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(monitor_snapshots)")
+            }
+            new_cols = {
+                "total_inquiries": "INTEGER DEFAULT 0",
+                "completed_orders_30d": "INTEGER DEFAULT 0",
+                "revenue_30d": "REAL DEFAULT 0.0",
+                "raw_data": "TEXT DEFAULT '{}'",
+                "error": "TEXT DEFAULT ''",
+            }
+            for col, definition in new_cols.items():
+                if col not in existing:
+                    conn.execute(
+                        f"ALTER TABLE monitor_snapshots ADD COLUMN {col} {definition}"
+                    )
+        except Exception:
+            pass  # 不阻塞启动
+
+    # ═══════════════════ 商品操作 ═══════════════════
 
     def save_product(self, item: Dict) -> int:
-        """保存或更新商品"""
         with self._get_conn() as conn:
-            # 检查是否已存在
             existing = conn.execute(
                 "SELECT id FROM products WHERE item_id = ?",
                 (item.get("item_id"),)
@@ -136,7 +177,6 @@ class DatabaseManager:
             }
 
             if existing:
-                # 更新
                 data["id"] = existing["id"]
                 conn.execute("""
                     UPDATE products SET
@@ -153,7 +193,6 @@ class DatabaseManager:
                 """, data)
                 return existing["id"]
             else:
-                # 插入
                 cursor = conn.execute("""
                     INSERT INTO products (
                         item_id, platform, original_title, ai_title, description,
@@ -170,7 +209,6 @@ class DatabaseManager:
                 return cursor.lastrowid
 
     def get_all_products(self, status: str = None) -> List[Dict]:
-        """获取所有商品"""
         with self._get_conn() as conn:
             if status:
                 rows = conn.execute(
@@ -181,29 +219,23 @@ class DatabaseManager:
                 rows = conn.execute(
                     "SELECT * FROM products ORDER BY created_at DESC"
                 ).fetchall()
-
             return [self._row_to_product(row) for row in rows]
 
     def get_product_by_id(self, product_id: int) -> Optional[Dict]:
-        """根据ID获取商品"""
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT * FROM products WHERE id = ?",
-                (product_id,)
+                "SELECT * FROM products WHERE id = ?", (product_id,)
             ).fetchone()
             return self._row_to_product(row) if row else None
 
     def get_product_by_item_id(self, item_id: str) -> Optional[Dict]:
-        """根据item_id获取商品"""
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT * FROM products WHERE item_id = ?",
-                (item_id,)
+                "SELECT * FROM products WHERE item_id = ?", (item_id,)
             ).fetchone()
             return self._row_to_product(row) if row else None
 
     def update_product_status(self, product_id: int, status: str):
-        """更新商品状态"""
         with self._get_conn() as conn:
             conn.execute(
                 "UPDATE products SET status = ?, updated_at = ? WHERE id = ?",
@@ -211,12 +243,10 @@ class DatabaseManager:
             )
 
     def delete_product(self, product_id: int):
-        """删除商品"""
         with self._get_conn() as conn:
             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
 
     def _row_to_product(self, row: sqlite3.Row) -> Dict:
-        """将数据库行转换为商品字典"""
         return {
             "db_id": row["id"],
             "item_id": row["item_id"],
@@ -240,10 +270,9 @@ class DatabaseManager:
             "created_at": row["created_at"],
         }
 
-    # ========== 订单操作 ==========
+    # ═══════════════════ 订单操作 ═══════════════════
 
     def save_order(self, order: Dict) -> int:
-        """保存订单"""
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO orders (
@@ -266,17 +295,7 @@ class DatabaseManager:
             ))
             return cursor.lastrowid
 
-    def get_orders_by_product(self, product_id: int) -> List[Dict]:
-        """获取商品关联的订单"""
-        with self._get_conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM orders WHERE product_id = ? ORDER BY created_at DESC",
-                (product_id,)
-            ).fetchall()
-            return [dict(row) for row in rows]
-
     def get_all_orders(self, status: str = None) -> List[Dict]:
-        """获取所有订单"""
         with self._get_conn() as conn:
             if status:
                 rows = conn.execute(
@@ -290,7 +309,6 @@ class DatabaseManager:
             return [dict(row) for row in rows]
 
     def update_order_status(self, order_id: int, status: str, upstream_info: Dict = None):
-        """更新订单状态"""
         with self._get_conn() as conn:
             if upstream_info:
                 conn.execute("""
@@ -305,7 +323,7 @@ class DatabaseManager:
                     upstream_info.get("upstream_order_id", ""),
                     upstream_info.get("upstream_status", ""),
                     datetime.now().isoformat(),
-                    order_id
+                    order_id,
                 ))
             else:
                 conn.execute(
@@ -313,10 +331,79 @@ class DatabaseManager:
                     (status, datetime.now().isoformat(), order_id)
                 )
 
-    # ========== Cookie操作 ==========
+    # ═══════════════════ 【新增】运营监控快照 ═══════════════════
+
+    def save_monitor_snapshot(self, data: Dict):
+        """保存平台运营监控快照"""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO monitor_snapshots (
+                    platform, snapshot_time, is_logged_in, active_listings,
+                    total_views, total_wants, total_inquiries,
+                    pending_orders, completed_orders_today, completed_orders_30d,
+                    revenue_today, revenue_30d, alerts, raw_data, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                data.get("platform", ""),
+                data.get("timestamp", datetime.now().isoformat()),
+                1 if data.get("is_logged_in") else 0,
+                data.get("active_listings", 0),
+                data.get("total_views", 0),
+                data.get("total_wants", 0),
+                data.get("total_inquiries", 0),
+                data.get("pending_orders", 0),
+                data.get("completed_orders_today", 0),
+                data.get("completed_orders_30d", 0),
+                data.get("revenue_today", 0.0),
+                data.get("revenue_30d", 0.0),
+                json.dumps(data.get("alerts", []), ensure_ascii=False),
+                json.dumps(data.get("raw_data", {}), ensure_ascii=False),
+                data.get("error", ""),
+            ))
+
+    def get_monitor_snapshots(self, platform: str, days: int = 7) -> List[Dict]:
+        """获取某平台最近 N 天的监控快照（最新在前）"""
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT * FROM monitor_snapshots
+                WHERE platform = ?
+                  AND snapshot_time >= datetime('now', ? || ' days')
+                ORDER BY snapshot_time DESC
+                LIMIT 200
+            """, (platform, f"-{days}")).fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                try:
+                    d["alerts"] = json.loads(d.get("alerts") or "[]")
+                except Exception:
+                    d["alerts"] = []
+                result.append(d)
+            return result
+
+    def get_latest_monitor_snapshot(self, platform: str) -> Optional[Dict]:
+        """获取某平台最新的一条快照"""
+        rows = self.get_monitor_snapshots(platform, days=30)
+        return rows[0] if rows else None
+
+    def clear_monitor_snapshots(self, platform: str = None, before_days: int = 90):
+        """清理旧的监控快照"""
+        with self._get_conn() as conn:
+            if platform:
+                conn.execute("""
+                    DELETE FROM monitor_snapshots
+                    WHERE platform = ?
+                      AND snapshot_time < datetime('now', ? || ' days')
+                """, (platform, f"-{before_days}"))
+            else:
+                conn.execute("""
+                    DELETE FROM monitor_snapshots
+                    WHERE snapshot_time < datetime('now', ? || ' days')
+                """, (f"-{before_days}",))
+
+    # ═══════════════════ Cookie 操作 ═══════════════════
 
     def save_cookie(self, platform: str, cookie_data: str):
-        """保存Cookie"""
         with self._get_conn() as conn:
             conn.execute("""
                 INSERT INTO cookies (platform, cookie_data, updated_at)
@@ -327,16 +414,13 @@ class DatabaseManager:
             """, (platform, cookie_data, datetime.now().isoformat()))
 
     def get_cookie(self, platform: str) -> Optional[str]:
-        """获取Cookie"""
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT cookie_data FROM cookies WHERE platform = ?",
-                (platform,)
+                "SELECT cookie_data FROM cookies WHERE platform = ?", (platform,)
             ).fetchone()
             return row["cookie_data"] if row else None
 
     def delete_cookie(self, platform: str):
-        """删除Cookie"""
         with self._get_conn() as conn:
             conn.execute("DELETE FROM cookies WHERE platform = ?", (platform,))
 

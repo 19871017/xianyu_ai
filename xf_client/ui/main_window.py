@@ -13,11 +13,12 @@ from ui.listing_tab import ListingTab
 from ui.export_tab import ExportTab
 from ui.settings_tab import SettingsTab
 from ui.order_tab import OrderTab
+from ui.monitor_tab import MonitorTab
 from license.license_validator import LicenseValidator
 from database.db_manager import db
 
 
-# 全局字体大小
+# 全局字体
 GLOBAL_FONT_SIZE = 14
 GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
 
@@ -25,8 +26,8 @@ GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("闲鱼AI助手 v2.0")
-        self.setMinimumSize(1100, 750)
+        self.setWindowTitle("多平台电商AI助手 v3.0")
+        self.setMinimumSize(1200, 800)
 
         # 设置全局字体
         font = QFont()
@@ -51,16 +52,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.status_label)
 
         # 未激活提示
-        self.unlicensed_label = QLabel("⚠️ 未激活：采集、文案优化、上架、导出功能不可用。请在设置页面输入License Key激活。")
+        self.unlicensed_label = QLabel(
+            "⚠️ 未激活：采集、文案优化、上架、导出、监控功能不可用。请在设置页面输入License Key激活。"
+        )
         self.unlicensed_label.setStyleSheet(
             "color: #e65100; background: #fff3e0; padding: 10px; "
             "border-radius: 4px; font-size: 14px; font-weight: bold;"
         )
         self.unlicensed_label.setWordWrap(True)
-        if not self.is_licensed():
-            layout.addWidget(self.unlicensed_label)
-        else:
-            self.unlicensed_label.setVisible(False)
+        self.unlicensed_label.setVisible(not self.is_licensed())
         layout.addWidget(self.unlicensed_label)
 
         # Tab Widget
@@ -72,18 +72,20 @@ class MainWindow(QMainWindow):
         self.listing_tab = ListingTab(self)
         self.export_tab = ExportTab(self)
         self.order_tab = OrderTab(self)
+        self.monitor_tab = MonitorTab(self)
         self.settings_tab = SettingsTab(self)
 
-        self.tabs.addTab(self.collect_tab, "🔍 采集")
-        self.tabs.addTab(self.copywriting_tab, "✍️ 文案优化")
-        self.tabs.addTab(self.listing_tab, "📦 上架")
-        self.tabs.addTab(self.export_tab, "📊 导出")
-        self.tabs.addTab(self.order_tab, "📋 订单")
-        self.tabs.addTab(self.settings_tab, "⚙️ 设置")
+        self.tabs.addTab(self.collect_tab,      "🔍 采集")
+        self.tabs.addTab(self.copywriting_tab,  "✍️ 文案优化")
+        self.tabs.addTab(self.listing_tab,      "📦 上架")
+        self.tabs.addTab(self.export_tab,       "📊 导出")
+        self.tabs.addTab(self.order_tab,        "📋 订单")
+        self.tabs.addTab(self.monitor_tab,      "📡 运营监控")
+        self.tabs.addTab(self.settings_tab,     "⚙️ 设置")
 
         layout.addWidget(self.tabs)
 
-        # 状态栏
+        # 底部状态栏
         self.statusBar().showMessage(f"就绪 | 已加载 {len(self.collected_items)} 个商品")
 
         # 刷新各Tab数据
@@ -92,8 +94,7 @@ class MainWindow(QMainWindow):
     def _load_products_from_db(self) -> list:
         """从数据库加载所有商品"""
         try:
-            products = db.get_all_products()
-            return products
+            return db.get_all_products()
         except Exception as e:
             print(f"加载数据库失败: {e}")
             return []
@@ -116,7 +117,9 @@ class MainWindow(QMainWindow):
             expires = info.get("expires_at", "N/A")
             if isinstance(expires, str) and len(expires) > 10:
                 expires = expires[:10]
-            self.status_label.setText(f"✅ 已激活 | License: {info['license_key'][:8]}... | 到期: {expires}")
+            self.status_label.setText(
+                f"✅ 已激活 | License: {info['license_key'][:8]}... | 到期: {expires}"
+            )
             self.status_label.setStyleSheet("color: #2e7d32; padding: 4px;")
         else:
             self.status_label.setText("❌ 未激活 | 请在设置页面输入License Key激活")
@@ -132,14 +135,12 @@ class MainWindow(QMainWindow):
         return self.collected_items
 
     def add_item(self, item: dict):
-        """添加单个商品到列表和数据库"""
-        # 保存到数据库
+        """添加单个商品"""
         try:
             db_id = db.save_product(item)
             item["db_id"] = db_id
         except Exception as e:
             print(f"保存商品到数据库失败: {e}")
-
         self.collected_items.append(item)
         self._refresh_all_tabs()
         self.statusBar().showMessage(f"已加载 {len(self.collected_items)} 个商品")
@@ -173,11 +174,7 @@ class MainWindow(QMainWindow):
 
     def update_status(self):
         self._update_status()
-        # 更新未激活提示
-        if self.is_licensed():
-            self.unlicensed_label.setVisible(False)
-        else:
-            self.unlicensed_label.setVisible(True)
+        self.unlicensed_label.setVisible(not self.is_licensed())
 
     def closeEvent(self, event):
         """关闭窗口时保存数据"""
@@ -186,4 +183,10 @@ class MainWindow(QMainWindow):
                 db.save_product(item)
         except Exception as e:
             print(f"关闭时保存失败: {e}")
+        # 停止监控 Tab 的定时器
+        try:
+            if hasattr(self.monitor_tab, "_auto_timer") and self.monitor_tab._auto_timer:
+                self.monitor_tab._auto_timer.stop()
+        except Exception:
+            pass
         event.accept()

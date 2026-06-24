@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QGroupBox,
     QRadioButton, QButtonGroup, QProgressBar, QMessageBox,
-    QTextEdit, QSplitter, QComboBox,
+    QTextEdit, QComboBox,
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QFont
@@ -12,6 +12,7 @@ from PyQt6.QtGui import QFont
 from engine.xianyu_collector import XianyuCollector
 from engine.pdd_collector import PddCollector
 from engine.alibaba_collector import AlibabaCollector
+from engine.jd_collector import JDCollector
 from database.db_manager import db
 
 
@@ -48,24 +49,59 @@ class CollectWorker(QThread):
                     items = collector.search_by_keyword(self.value, self.count)
                 else:
                     items = collector.collect_by_homepage(self.value, self.count)
+
             elif self.platform == "pdd":
                 collector = PddCollector(on_progress=on_progress)
                 if self.mode == "keyword":
                     items = collector.search_by_keyword(self.value, self.count)
                 else:
                     items = collector.collect_by_link(self.value)
+
             elif self.platform == "1688":
                 collector = AlibabaCollector(on_progress=on_progress)
                 if self.mode == "keyword":
                     items = collector.search_by_keyword(self.value, self.count)
                 else:
                     items = collector.collect_by_link(self.value)
+
+            elif self.platform == "jd":
+                collector = JDCollector(on_progress=on_progress)
+                if self.mode == "keyword":
+                    items = collector.search_by_keyword(self.value, self.count)
+                else:
+                    items = collector.collect_by_link(self.value)
+
             else:
                 items = []
 
             self.finished.emit(items)
         except Exception as e:
             self.error.emit(str(e))
+
+
+# 平台提示配置
+PLATFORM_HINTS = {
+    "xianyu": {
+        "keyword": "输入要搜索的关键词，如：iPhone 15",
+        "link": "粘贴闲鱼商品链接，如：https://www.goofish.com/item?id=xxx",
+        "link_label": "主页/商品链接:",
+    },
+    "pdd": {
+        "keyword": "输入拼多多搜索关键词，如：无线耳机",
+        "link": "粘贴拼多多商品链接，如：https://mobile.yangkeduo.com/goods.html?goods_id=xxx",
+        "link_label": "商品链接:",
+    },
+    "1688": {
+        "keyword": "输入1688搜索关键词，如：手机壳批发",
+        "link": "粘贴1688商品链接，如：https://detail.1688.com/offer/xxx.html",
+        "link_label": "商品链接:",
+    },
+    "jd": {
+        "keyword": "输入京东搜索关键词，如：小米14",
+        "link": "粘贴京东商品链接，如：https://item.jd.com/xxxxxxxxx.html",
+        "link_label": "商品链接:",
+    },
+}
 
 
 class CollectTab(QWidget):
@@ -79,30 +115,32 @@ class CollectTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        # 平台选择
+        # ── 平台选择 ──
         platform_group = QGroupBox("采集平台")
         platform_group.setFont(QFont(GLOBAL_FONT_FAMILY, 13, QFont.Weight.Bold))
         platform_layout = QHBoxLayout(platform_group)
 
-        platform_layout.addWidget(QLabel("选择平台:"))
+        platform_layout.addWidget(QLabel("选择采集平台:"))
         self.platform_combo = QComboBox()
         self.platform_combo.setMinimumHeight(36)
+        self.platform_combo.setFont(QFont(GLOBAL_FONT_FAMILY, 13))
         self.platform_combo.addItem("🐟 闲鱼", "xianyu")
         self.platform_combo.addItem("🛒 拼多多", "pdd")
+        self.platform_combo.addItem("🏪 京东", "jd")
         self.platform_combo.addItem("🏭 阿里巴巴(1688)", "1688")
         self.platform_combo.currentIndexChanged.connect(self._on_platform_changed)
         platform_layout.addWidget(self.platform_combo)
         platform_layout.addStretch()
         layout.addWidget(platform_group)
 
-        # 模式选择
+        # ── 采集模式 ──
         mode_group = QGroupBox("采集模式")
         mode_group.setFont(QFont(GLOBAL_FONT_FAMILY, 13, QFont.Weight.Bold))
         mode_layout = QVBoxLayout(mode_group)
         mode_layout.setSpacing(8)
 
         self.keyword_radio = QRadioButton("🔍 关键词搜索采集")
-        self.homepage_radio = QRadioButton("🔗 商品链接采集")
+        self.homepage_radio = QRadioButton("🔗 商品链接直采")
         self.keyword_radio.setChecked(True)
 
         self.mode_btn_group = QButtonGroup(self)
@@ -114,7 +152,7 @@ class CollectTab(QWidget):
         mode_layout.addWidget(self.homepage_radio)
         layout.addWidget(mode_group)
 
-        # 采集参数
+        # ── 采集参数 ──
         param_group = QGroupBox("采集参数")
         param_group.setFont(QFont(GLOBAL_FONT_FAMILY, 13, QFont.Weight.Bold))
         param_layout = QVBoxLayout(param_group)
@@ -139,7 +177,7 @@ class CollectTab(QWidget):
 
         layout.addWidget(param_group)
 
-        # 日志区
+        # ── 日志区 ──
         log_group = QGroupBox("采集日志")
         log_group.setFont(QFont(GLOBAL_FONT_FAMILY, 13, QFont.Weight.Bold))
         log_layout = QVBoxLayout(log_group)
@@ -150,14 +188,14 @@ class CollectTab(QWidget):
         log_layout.addWidget(self.log_area)
         layout.addWidget(log_group)
 
-        # 进度
+        # ── 进度 ──
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(False)
         self.progress_bar.setMinimumHeight(28)
         layout.addWidget(self.progress_bar)
 
-        # 按钮
+        # ── 按钮 ──
         btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("🚀 开始采集")
         self.start_btn.setMinimumHeight(42)
@@ -184,7 +222,7 @@ class CollectTab(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        # 已采集数据统计
+        # ── 统计 ──
         self.stats_label = QLabel("")
         self.stats_label.setStyleSheet("color: #666; font-size: 13px; padding: 4px;")
         layout.addWidget(self.stats_label)
@@ -192,23 +230,22 @@ class CollectTab(QWidget):
         layout.addStretch()
 
     def _on_platform_changed(self):
-        """平台切换时更新提示"""
         platform = self.platform_combo.currentData()
-        if platform == "xianyu":
-            self.input_field.setPlaceholderText("输入要搜索的关键词，如：iPhone 15")
-        elif platform == "pdd":
-            self.input_field.setPlaceholderText("输入拼多多搜索关键词，或粘贴商品链接")
-        elif platform == "1688":
-            self.input_field.setPlaceholderText("输入1688搜索关键词，或粘贴商品链接")
+        hints = PLATFORM_HINTS.get(platform, PLATFORM_HINTS["xianyu"])
+        mode = "keyword" if self.keyword_radio.isChecked() else "link"
+        self.input_field.setPlaceholderText(hints[mode])
 
     def _on_mode_changed(self, btn_id, checked):
-        if checked:
-            if btn_id == 0:
-                self.input_label.setText("关键词:")
-                self.input_field.setPlaceholderText("输入要搜索的关键词")
-            else:
-                self.input_label.setText("商品链接:")
-                self.input_field.setPlaceholderText("粘贴商品详情页链接")
+        if not checked:
+            return
+        platform = self.platform_combo.currentData()
+        hints = PLATFORM_HINTS.get(platform, PLATFORM_HINTS["xianyu"])
+        if btn_id == 0:
+            self.input_label.setText("关键词:")
+            self.input_field.setPlaceholderText(hints["keyword"])
+        else:
+            self.input_label.setText(hints.get("link_label", "商品链接:"))
+            self.input_field.setPlaceholderText(hints["link"])
 
     def _start_collect(self):
         if not self.main_window.is_licensed():
@@ -224,13 +261,16 @@ class CollectTab(QWidget):
             return
 
         if mode == "homepage" and not is_valid_url(value):
+            platform_examples = {
+                "xianyu": "https://www.goofish.com/item?id=xxx",
+                "pdd": "https://mobile.yangkeduo.com/goods.html?goods_id=xxx",
+                "jd": "https://item.jd.com/xxxxxxxxx.html",
+                "1688": "https://detail.1688.com/offer/xxx.html",
+            }
+            example = platform_examples.get(platform, "https://...")
             QMessageBox.warning(
                 self, "无效的URL",
-                "请输入有效的商品链接\n\n"
-                "格式示例：\n"
-                "闲鱼: https://www.goofish.com/item?id=xxx\n"
-                "拼多多: https://mobile.yangkeduo.com/goods.html?goods_id=xxx\n"
-                "1688: https://detail.1688.com/offer/xxx.html"
+                f"请输入有效的商品链接\n\n格式示例:\n{example}"
             )
             return
 
@@ -258,7 +298,6 @@ class CollectTab(QWidget):
         self._append_log(msg)
 
     def _on_finished(self, items):
-        # 保存到数据库
         for item in items:
             try:
                 db_id = db.save_product(item)
@@ -271,7 +310,10 @@ class CollectTab(QWidget):
         total_imgs = sum(len(it.get("local_images", [])) for it in items)
         self._append_log(f"\n✅ 采集完成！共 {len(items)} 个商品，{total_imgs} 张图片（已MD5去重）")
         self._append_log(f"💾 数据已保存到本地数据库，关闭软件不会丢失")
-        QMessageBox.information(self, "完成", f"采集完成，共 {len(items)} 个商品，{total_imgs} 张图片\n数据已自动保存")
+        QMessageBox.information(
+            self, "完成",
+            f"采集完成，共 {len(items)} 个商品，{total_imgs} 张图片\n数据已自动保存"
+        )
 
     def _on_error(self, msg):
         self._reset_ui()
@@ -291,10 +333,12 @@ class CollectTab(QWidget):
 
     def refresh_items(self, items):
         """刷新统计信息"""
+        platform_map = {"xianyu": "闲鱼", "pdd": "拼多多", "jd": "京东", "1688": "1688"}
         platform_counts = {}
         for item in items:
             p = item.get("platform", "xianyu")
-            platform_counts[p] = platform_counts.get(p, 0) + 1
+            label = platform_map.get(p, p)
+            platform_counts[label] = platform_counts.get(label, 0) + 1
 
         stats = " | ".join([f"{k}: {v}个" for k, v in platform_counts.items()])
-        self.stats_label.setText(f"📊 当前数据: {stats}" if stats else "📊 暂无数据")
+        self.stats_label.setText(f"📊 当前数据: {stats}" if stats else "📊 暂无采集数据")
