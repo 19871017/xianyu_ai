@@ -6,7 +6,9 @@ import os
 import requests
 from urllib.parse import urlparse, parse_qs
 from DrissionPage import Chromium
-from config import XIANYU_BASE_URL, IMAGE_DIR
+from config import PLATFORM_URLS, IMAGE_DIR
+
+XIANYU_BASE_URL = PLATFORM_URLS['xianyu']['home'].rstrip('/')
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.browser_config import get_chromium_options, check_browser_available
 
@@ -114,7 +116,7 @@ class XianyuCollector:
 
     # ─── 搜索列表页 ───
     def _collect_search_links(self, keyword: str, count: int = 50) -> list[str]:
-        url = f"{XIANYU_BASE_URL}/search?q={keyword}"
+        url = PLATFORM_URLS['xianyu']['search'].format(kw=keyword)
         self.page.get(url)
         time.sleep(3)
 

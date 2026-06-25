@@ -99,3 +99,8 @@ BROWSER_WAIT_AFTER_NAV = 3        # 页面跳转后等待(秒)
 # ──────────────────────── 版本 ────────────────────────
 APP_VERSION = "3.0.0"
 APP_NAME = "多平台电商AI助手"
+
+# ──────────────────────── 兼容别名 ────────────────────────
+SERVER_URL = SERVER_BASE_URL          # 旧代码引用 SERVER_URL
+AI_MODEL = AI_API_MODEL                # 旧代码引用 AI_MODEL
+LICENSE_FILE = os.path.join(BASE_DIR, ".xf_license.json")  # License 文件路径

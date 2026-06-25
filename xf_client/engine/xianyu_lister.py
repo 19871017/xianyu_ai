@@ -1,8 +1,9 @@
 import time
 import os
 from DrissionPage import ChromiumPage, ChromiumOptions
-# 闲鱼发布页URL
-XIANYU_BASE_URL = "https://www.goofish.com"
+from config import PLATFORM_URLS
+
+XIANYU_BASE_URL = PLATFORM_URLS['xianyu']['home'].rstrip('/')
 
 
 class XianyuLister:
