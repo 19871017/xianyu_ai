@@ -1,7 +1,8 @@
 import time
 import os
 from DrissionPage import ChromiumPage, ChromiumOptions
-from config import XIANYU_BASE_URL
+# 闲鱼发布页URL
+XIANYU_BASE_URL = "https://www.goofish.com"
 
 
 class XianyuLister:
@@ -15,8 +16,9 @@ class XianyuLister:
     - 所在地弹窗: 搜索地点 input[class*="search-input"]
     """
 
-    def __init__(self):
+    def __init__(self, on_progress=None):
         self.page = None
+        self._log = on_progress or (lambda msg: None)
 
     def _init_browser(self):
         co = ChromiumOptions()
