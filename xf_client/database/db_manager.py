@@ -4,6 +4,11 @@ import os
 from datetime import datetime
 from typing import List, Dict, Optional
 
+try:
+    from engine.product_package import PACKAGE_ATTR_KEY
+except Exception:
+    PACKAGE_ATTR_KEY = '_full_product_package'
+
 
 DB_PATH = os.path.join(os.path.expanduser("~"), ".xf_data", "data.db")
 
@@ -247,11 +252,13 @@ class DatabaseManager:
             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
 
     def _row_to_product(self, row: sqlite3.Row) -> Dict:
-        return {
+        attrs = json.loads(row["attributes"] or "{}")
+        product = {
             "db_id": row["id"],
             "item_id": row["item_id"],
             "platform": row["platform"],
             "original_title": row["original_title"],
+            "title": row["ai_title"] or row["original_title"],
             "ai_title": row["ai_title"] or row["original_title"],
             "description": row["description"],
             "original_price": row["original_price"],
@@ -264,11 +271,16 @@ class DatabaseManager:
             "source_url": row["source_url"],
             "source_item_id": row["source_item_id"],
             "local_images": json.loads(row["local_images"] or "[]"),
-            "attributes": json.loads(row["attributes"] or "{}"),
+            "attributes": attrs,
             "tags": json.loads(row["tags"] or "[]"),
             "status": row["status"],
             "created_at": row["created_at"],
         }
+        package = attrs.get(PACKAGE_ATTR_KEY) if isinstance(attrs, dict) else None
+        if isinstance(package, dict):
+            product.update(package)
+            product["attributes"] = attrs
+        return product
 
     # ═══════════════════ 订单操作 ═══════════════════
 

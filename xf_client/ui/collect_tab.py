@@ -14,6 +14,7 @@ from engine.pdd_collector import PddCollector
 from engine.alibaba_collector import AlibabaCollector
 from engine.jd_collector import JDCollector
 from database.db_manager import db
+from engine.product_package import ensure_full_product_package, export_products_package
 
 
 GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
@@ -298,21 +299,35 @@ class CollectTab(QWidget):
         self._append_log(msg)
 
     def _on_finished(self, items):
+        normalized_items = []
         for item in items:
             try:
+                item = ensure_full_product_package(item)
                 db_id = db.save_product(item)
                 item["db_id"] = db_id
+                normalized_items.append(item)
             except Exception as e:
                 print(f"保存商品失败: {e}")
 
-        self.main_window.set_items(items)
+        export_dir = ""
+        if normalized_items:
+            try:
+                export_dir = export_products_package(normalized_items)
+            except Exception as e:
+                self._append_log(f"⚠ 商品包导出失败: {e}")
+
+        self.main_window.set_items(normalized_items)
         self._reset_ui()
-        total_imgs = sum(len(it.get("local_images", [])) for it in items)
-        self._append_log(f"\n✅ 采集完成！共 {len(items)} 个商品，{total_imgs} 张图片（已MD5去重）")
+        total_imgs = sum(len(it.get("local_images", [])) for it in normalized_items)
+        total_skus = sum(len(it.get("sku_list", [])) for it in normalized_items)
+        self._append_log(f"\n✅ 采集完成！共 {len(normalized_items)} 个商品，{total_skus} 个SKU，{total_imgs} 张图片（已MD5去重）")
         self._append_log(f"💾 数据已保存到本地数据库，关闭软件不会丢失")
+        if export_dir:
+            self._append_log(f"📦 商品包已导出: {export_dir}")
         QMessageBox.information(
             self, "完成",
-            f"采集完成，共 {len(items)} 个商品，{total_imgs} 张图片\n数据已自动保存"
+            f"采集完成，共 {len(normalized_items)} 个商品，{total_skus} 个SKU，{total_imgs} 张图片\n数据已自动保存"
+            + (f"\n\n商品包已导出:\n{export_dir}" if export_dir else "")
         )
 
     def _on_error(self, msg):
