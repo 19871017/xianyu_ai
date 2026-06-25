@@ -170,7 +170,8 @@ class XianyuLister:
         return False
 
     def list_item(self, item: dict, price: str = None, price_markup_pct: float = 0,
-                  stock: str = "1", location: str = "全国", schedule_time: str = None) -> dict:
+                  stock: str = "1", location: str = "全国", schedule_time: str = None,
+                  wait_login: bool = True) -> dict:
         """上架单个商品
         
         Args:
