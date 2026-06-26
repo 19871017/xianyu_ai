@@ -63,17 +63,38 @@ class JDCollector:
         )
 
     def _is_logged_in(self) -> bool:
-        """检查京东登录态"""
+        """检查京东登录态 - 严格验证"""
         try:
             url = self.tab.url or ""
             if "login" in url.lower() or "passport" in url.lower():
                 return False
-            result = self.tab.run_js("""
+
+            # 第一步：Cookie严格检查 - thor或pt_key
+            cookie_ok = self.tab.run_js("""
             var c = document.cookie || '';
-            return c.includes('thor') || c.includes('pin') ||
-                   c.includes('pinId') || c.includes('pt_key');
+            var hasThor = /\\bthor=[^;]{5,}/.test(c);
+            var hasPtk = /\\bpt_key=[^;]{5,}/.test(c);
+            return hasThor || hasPtk;
             """)
-            return bool(result)
+            if not cookie_ok:
+                return False
+
+            # 第二步：DOM验证 - 登录后页面才有的元素
+            dom_ok = self.tab.run_js("""
+            try {
+                var text = document.body.innerText || '';
+                if (text.includes('退出登录') || text.includes('我的京东') ||
+                    text.includes('我的订单')) {
+                    return true;
+                }
+                var userEl = document.querySelector('[class*="user-name"], [class*="nickname"], .link-user');
+                if (userEl && userEl.offsetParent !== null) return true;
+                var loginBtn = document.querySelector('[class*="login"], .link-login');
+                if (loginBtn && loginBtn.offsetParent !== null) return false;
+                return true;
+            } catch(e) { return false; }
+            """)
+            return bool(dom_ok)
         except Exception:
             return False
 

@@ -145,11 +145,12 @@ class AlibabaCollector:
     # ═══════════════════════════════════════════════════════════
 
     def _is_logged_in(self) -> bool:
-        """检查是否已登录1688
+        """检查是否已登录1688 - Cookie + DOM双重验证
 
         判断逻辑:
         1. 当前URL是否被重定向到登录页
-        2. Cookie中是否包含1688登录标记
+        2. Cookie中是否包含1688核心登录凭证(unb)
+        3. DOM中是否有登录后才有的元素
         """
         try:
             tab = self._safe_tab()
@@ -159,19 +160,33 @@ class AlibabaCollector:
             if "login.taobao.com" in current_url or "login.1688.com" in current_url:
                 return False
 
-            # 检查Cookie中的登录标记
-            result = tab.run_js("""
+            # 第一步：Cookie严格检查 - unb是核心用户ID
+            cookie_ok = tab.run_js("""
             var c = document.cookie || '';
-            return c.includes('cna') && (
-                c.includes('unb') ||
-                c.includes('lid') ||
-                c.includes('cookie17') ||
-                c.includes('login_') ||
-                c.includes('_m_h5_tk') ||
-                c.includes('xlly_s')
-            );
+            var hasUnb = /\\bunb=\\d{5,}/.test(c);
+            var hasCookie17 = /\\bcookie17=[^;]{5,}/.test(c);
+            if (!hasUnb) return false;
+            return hasCookie17;
             """)
-            return bool(result)
+            if not cookie_ok:
+                return False
+
+            # 第二步：DOM验证
+            dom_ok = tab.run_js("""
+            try {
+                var text = document.body.innerText || '';
+                if (text.includes('退出登录') || text.includes('我的阿里') ||
+                    text.includes('旺铺') || text.includes('卖家中心')) {
+                    return true;
+                }
+                var userEl = document.querySelector('[class*="user-name"], [class*="member-name"], [class*="avatar"]');
+                if (userEl && userEl.offsetParent !== null) return true;
+                var loginBtn = document.querySelector('[class*="login"], [class*="to-login"]');
+                if (loginBtn && loginBtn.offsetParent !== null) return false;
+                return true;
+            } catch(e) { return false; }
+            """)
+            return bool(dom_ok)
         except Exception:
             return False
 

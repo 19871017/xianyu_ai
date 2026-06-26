@@ -57,17 +57,38 @@ class XianyuCollector:
         """)
 
     def _is_logged_in(self) -> bool:
-        """检查闲鱼登录态"""
+        """检查闲鱼登录态 - Cookie + DOM双重验证"""
         try:
             url = self.page.url or ""
             if "login" in url.lower() or "passport" in url.lower():
                 return False
-            result = self.page.run_js("""
+
+            # 第一步：Cookie严格检查 - unb是核心用户ID
+            cookie_ok = self.page.run_js("""
             var c = document.cookie || '';
-            return c.includes('unb') || c.includes('_m_h5_tk') ||
-                   c.includes('cookie2') || c.includes('t');
+            var hasUnb = c.match(/\\bunb=(\\d+)/);
+            var hasCookie2 = /\bcookie2=/.test(c);
+            if (!hasUnb) return false;
+            return hasCookie2;
             """)
-            return bool(result)
+            if not cookie_ok:
+                return False
+
+            # 第二步：DOM验证 - 登录后页面才有的元素
+            dom_ok = self.page.run_js("""
+            try {
+                var text = document.body.innerText || '';
+                if (text.includes('退出登录') || text.includes('已卖出') ||
+                    text.includes('我的闲鱼')) {
+                    return true;
+                }
+                var avatar = document.querySelector('[class*="avatar"], [class*="user-info"], [class*="nickname"]');
+                if (avatar && avatar.offsetParent !== null) return true;
+                var loginBtn = document.querySelector('[class*="login-btn"], [class*="to-login"]');
+                return !loginBtn;
+            } catch(e) { return false; }
+            """)
+            return bool(dom_ok)
         except Exception:
             return False
 

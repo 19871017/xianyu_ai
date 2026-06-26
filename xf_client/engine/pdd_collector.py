@@ -326,20 +326,37 @@ class PddCollector:
     # ──────────────────────── 登录检测 ────────────────────────
 
     def _is_logged_in(self) -> bool:
-        """检查 Cookie 中是否有登录标记"""
+        """检查登录态 - Cookie + DOM双重验证"""
         try:
             url = self._safe_tab().url or ""
             if "login" in url.lower() or "passport" in url.lower():
                 return False
-            result = self.tab.run_js("""
+
+            # 第一步：Cookie严格检查
+            cookie_ok = self.tab.run_js("""
             var c = document.cookie || '';
-            return c.includes('pdduid') ||
-                   c.includes('multi_sid') ||
-                   c.includes('PDDAccessToken') ||
-                   c.includes('api_uid') ||
-                   c.includes('_nano_fp');
+            var hasAccessToken = /\\bPDDAccessToken=[^;]{10,}/.test(c);
+            var hasMultiSid = /\\bmulti_sid=[^;]{5,}/.test(c);
+            return hasAccessToken || hasMultiSid;
             """)
-            return bool(result)
+            if not cookie_ok:
+                return False
+
+            # 第二步：DOM验证
+            dom_ok = self.tab.run_js("""
+            try {
+                var text = document.body.innerText || '';
+                if (text.includes('退出登录') || text.includes('个人中心')) {
+                    return true;
+                }
+                var userEl = document.querySelector('[class*="user-name"], [class*="nickname"], [class*="avatar"]');
+                if (userEl && userEl.offsetParent !== null) return true;
+                var loginBtn = document.querySelector('[class*="login-btn"], [class*="to-login"]');
+                if (loginBtn && loginBtn.offsetParent !== null) return false;
+                return true;
+            } catch(e) { return false; }
+            """)
+            return bool(dom_ok)
         except Exception:
             return False
 
