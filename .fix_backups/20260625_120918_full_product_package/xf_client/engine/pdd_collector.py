@@ -38,8 +38,6 @@ from DrissionPage import Chromium
 from config import IMAGE_DIR
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.browser_config import get_chromium_options, check_browser_available
-from engine.product_package import download_product_image_groups
-from engine.pdd_full_package import enrich_pdd_product
 
 
 # ─── 持久化Profile目录 ───────────────────────────────────────
@@ -687,7 +685,6 @@ class PddCollector:
         # 标准化解析
         for raw in collected_raw:
             item = self._parse_item(raw, search_url)
-            item = self._ensure_full_product_item(item, raw)
             if item:
                 items.append(item)
             if len(items) >= count:
@@ -804,7 +801,6 @@ class PddCollector:
             raw_items = json.loads(raw_json)
             for raw in raw_items:
                 item = self._parse_item(raw, search_url)
-                item = self._ensure_full_product_item(item, raw)
                 if item:
                     items.append(item)
             self._log(f"  ✓ DOM解析: {len(items)} 个商品")
@@ -813,39 +809,23 @@ class PddCollector:
 
         return items
 
-
-    def _ensure_full_product_item(self, item: dict | None, raw: dict | None = None, use_dom: bool = False):
-        """补齐拼多多完整商品包字段：SKU、主图、详情图、SKU图、售后等。"""
-        try:
-            return enrich_pdd_product(item, raw=raw, tab=self.tab if use_dom else None, logger=self._log)
-        except Exception as e:
-            self._log(f"  ⚠ 完整商品包增强失败: {e}")
-            return item
-
     def _batch_download_images(self, items: list) -> list:
-        """批量下载图片，并按主图/详情图/SKU图分组保存。"""
-        results = []
+        """批量下载图片（MD5去重）"""
         for item in items:
             goods_id = item.get("source_item_id", "unknown")
             item_dir = os.path.join(IMAGE_DIR, f"pdd_{sanitize_filename(str(goods_id))}")
             ensure_dir(item_dir)
 
-            try:
-                item = download_product_image_groups(item, self._download_image, item_dir)
-            except Exception as e:
-                self._log(f"  ⚠ 分组下载失败，回退旧图片下载: {e}")
-                local_images = []
-                for idx, img_url in enumerate(item.get("image_urls", [])[:8]):
-                    saved = self._download_image(img_url, item_dir, idx)
-                    if saved:
-                        local_images.append(saved)
-                item["local_images"] = local_images
-                item["main_images"] = local_images
+            local_images = []
+            for idx, img_url in enumerate(item.get("image_urls", [])[:8]):
+                saved = self._download_image(img_url, item_dir, idx)
+                if saved:
+                    local_images.append(saved)
 
+            item["local_images"] = local_images
             item["image_dir"] = item_dir
-            results.append(item)
 
-        return results
+        return items
 
     # ──────────────────────── 公开接口 ────────────────────────
 
@@ -917,35 +897,6 @@ class PddCollector:
         finally:
             self._close_browser()
 
-    def ensure_login(self, timeout: int = 300) -> bool:
-        """独立登录入口（采集前调用）"""
-        try:
-            self._init_browser()
-            self._log("正在打开拼多多...")
-            self._safe_tab().get(PDD_MOBILE_HOME)
-            time.sleep(3)
-            if self._is_logged_in():
-                self._log("✅ 已登录（使用保存的Cookie）")
-                return True
-            return self._wait_for_login(timeout)
-        except Exception as e:
-            self._log(f"登录初始化失败: {e}")
-            return False
-        finally:
-            self._close_browser()
-
-    def check_login_status(self) -> bool:
-        """检查登录态（不阻塞）"""
-        try:
-            self._init_browser()
-            self._safe_tab().get(PDD_MOBILE_HOME)
-            time.sleep(3)
-            return self._is_logged_in()
-        except Exception:
-            return False
-        finally:
-            self._close_browser()
-
     def collect_by_link(self, url: str) -> list:
         """单个商品链接直采
 
@@ -958,17 +909,6 @@ class PddCollector:
             self._init_browser()
             self.items = []
             self.seen_img_md5 = set()
-
-            # 检查登录态
-            self._log("检查登录状态...")
-            self._safe_tab().get(PDD_MOBILE_HOME)
-            time.sleep(3)
-            if not self._is_logged_in():
-                logged_in = self._wait_for_login(300)
-                if not logged_in:
-                    raise Exception("登录超时，请先点击'登录账号'按钮完成登录")
-            else:
-                self._log("✅ 已登录")
 
             m = re.search(r"goods_id=(\d+)", url)
             goods_id = m.group(1) if m else ""
@@ -1016,7 +956,6 @@ class PddCollector:
                             goods = self._find_goods_list(data)
                             if goods:
                                 item = self._parse_item(goods[0], url)
-                                item = self._ensure_full_product_item(item, goods[0], use_dom=True)
                                 if item:
                                     self.items.append(item)
                                     found = True
@@ -1051,7 +990,6 @@ class PddCollector:
                 try:
                     raw_data = json.loads(raw)
                     item = self._parse_item(raw_data, url)
-                    item = self._ensure_full_product_item(item, raw_data, use_dom=True)
                     if item:
                         self.items.append(item)
                 except Exception:

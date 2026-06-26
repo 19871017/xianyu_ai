@@ -232,6 +232,30 @@ class AlibabaCollector:
         self._log("❌ 登录等待超时")
         return False
 
+    def ensure_login(self, timeout: int = 300) -> bool:
+        """独立登录入口（采集前调用）"""
+        try:
+            self._init_browser()
+            return self._ensure_login(timeout)
+        except Exception as e:
+            self._log(f"登录初始化失败: {e}")
+            return False
+        finally:
+            self._close_browser()
+
+    def check_login_status(self) -> bool:
+        """检查登录态（不阻塞）"""
+        try:
+            self._init_browser()
+            tab = self._safe_tab()
+            tab.get(HOME_URL)
+            time.sleep(3)
+            return self._is_logged_in()
+        except Exception:
+            return False
+        finally:
+            self._close_browser()
+
     # ═══════════════════════════════════════════════════════════
     #  图片下载
     # ═══════════════════════════════════════════════════════════

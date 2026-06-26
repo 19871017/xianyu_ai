@@ -12,6 +12,8 @@ XIANYU_BASE_URL = PLATFORM_URLS['xianyu']['home'].rstrip('/')
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.browser_config import get_chromium_options, check_browser_available
 
+XIANYU_PROFILE_DIR = os.path.join(os.path.expanduser("~"), ".xf_xianyu_collector_profile")
+
 
 class XianyuCollector:
     """闲鱼商品采集器 - 支持关键词搜索、主页采集、商品链接采集
@@ -46,12 +48,82 @@ class XianyuCollector:
         if not ok:
             raise Exception(f"浏览器检查失败: {msg}")
         
-        co, _port = get_chromium_options()
+        os.makedirs(XIANYU_PROFILE_DIR, exist_ok=True)
+        co, _port = get_chromium_options(user_data_dir=XIANYU_PROFILE_DIR)
         chromium = Chromium(co)
         self.page = chromium.latest_tab
         self.page.run_js("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         """)
+
+    def _is_logged_in(self) -> bool:
+        """检查闲鱼登录态"""
+        try:
+            url = self.page.url or ""
+            if "login" in url.lower() or "passport" in url.lower():
+                return False
+            result = self.page.run_js("""
+            var c = document.cookie || '';
+            return c.includes('unb') || c.includes('_m_h5_tk') ||
+                   c.includes('cookie2') || c.includes('t');
+            """)
+            return bool(result)
+        except Exception:
+            return False
+
+    def ensure_login(self, timeout: int = 300) -> bool:
+        """确保已登录，未登录则打开登录页等待扫码"""
+        try:
+            self._init_browser()
+            self.page.get(XIANYU_BASE_URL)
+            time.sleep(3)
+            
+            if self._is_logged_in():
+                self._log("✓ 闲鱼已登录")
+                return True
+            
+            self._log("=" * 50)
+            self._log("⚠️  请在浏览器中登录闲鱼账号")
+            self._log("   登录成功后采集将自动继续")
+            self._log("=" * 50)
+            
+            login_url = "https://login.taobao.com/"
+            self.page.get(login_url)
+            
+            # 等待用户登录
+            for i in range(timeout):
+                time.sleep(1)
+                try:
+                    url = self.page.url or ""
+                    if "login" not in url.lower() and "passport" not in url.lower():
+                        time.sleep(2)
+                        if self._is_logged_in():
+                            self._log("✓ 登录成功！登录态已保存")
+                            return True
+                except Exception:
+                    pass
+                if i % 30 == 0 and i > 0:
+                    self._log(f"   等待登录中... ({i}s)")
+            
+            self._log("❌ 登录超时")
+            return False
+        except Exception as e:
+            self._log(f"登录初始化失败: {e}")
+            return False
+        finally:
+            self._close_browser()
+
+    def check_login_status(self) -> bool:
+        """检查登录态（不阻塞，不弹浏览器）"""
+        try:
+            self._init_browser()
+            self.page.get(XIANYU_BASE_URL)
+            time.sleep(3)
+            return self._is_logged_in()
+        except Exception:
+            return False
+        finally:
+            self._close_browser()
 
     def _close_browser(self):
         if self.page:
@@ -476,6 +548,29 @@ class XianyuCollector:
             self.seen_ids = set()
             self.seen_img_md5 = set()
 
+            # 检查登录态
+            self._log("检查登录状态...")
+            self.page.get(XIANYU_BASE_URL)
+            time.sleep(3)
+            if not self._is_logged_in():
+                self._log("⚠️ 未登录，正在打开登录页...")
+                self.page.get("https://login.taobao.com/")
+                self._log("请在浏览器中登录闲鱼账号，登录后采集自动继续...")
+                for i in range(300):
+                    time.sleep(1)
+                    url = self.page.url or ""
+                    if "login" not in url.lower() and "passport" not in url.lower():
+                        time.sleep(2)
+                        if self._is_logged_in():
+                            break
+                    if i % 30 == 0 and i > 0:
+                        self._log(f"等待登录... ({i}s)")
+                else:
+                    raise Exception("登录超时，请先点击'登录账号'按钮完成登录")
+                self._log("✓ 登录成功，开始采集")
+            else:
+                self._log("✓ 已登录")
+
             self._log(f"正在搜索: {keyword}")
             links = self._collect_search_links(keyword, count)
             self._log(f"找到 {len(links)} 个商品，开始逐个采集详情...")
@@ -508,6 +603,29 @@ class XianyuCollector:
             self.items = []
             self.seen_ids = set()
             self.seen_img_md5 = set()
+
+            # 检查登录态
+            self._log("检查登录状态...")
+            self.page.get(XIANYU_BASE_URL)
+            time.sleep(3)
+            if not self._is_logged_in():
+                self._log("⚠️ 未登录，正在打开登录页...")
+                self.page.get("https://login.taobao.com/")
+                self._log("请在浏览器中登录闲鱼账号，登录后采集自动继续...")
+                for i in range(300):
+                    time.sleep(1)
+                    url = self.page.url or ""
+                    if "login" not in url.lower() and "passport" not in url.lower():
+                        time.sleep(2)
+                        if self._is_logged_in():
+                            break
+                    if i % 30 == 0 and i > 0:
+                        self._log(f"等待登录... ({i}s)")
+                else:
+                    raise Exception("登录超时，请先点击'登录账号'按钮完成登录")
+                self._log("✓ 登录成功，开始采集")
+            else:
+                self._log("✓ 已登录")
 
             self._log(f"正在采集主页: {homepage_url}")
             links = self._collect_homepage_links(homepage_url, count)

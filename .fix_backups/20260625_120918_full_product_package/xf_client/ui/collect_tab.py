@@ -14,26 +14,9 @@ from engine.pdd_collector import PddCollector
 from engine.alibaba_collector import AlibabaCollector
 from engine.jd_collector import JDCollector
 from database.db_manager import db
-from engine.product_package import ensure_full_product_package, export_products_package
 
 
 GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
-
-# 各平台采集器类映射
-COLLECTOR_CLASSES = {
-    "xianyu": XianyuCollector,
-    "pdd": PddCollector,
-    "jd": JDCollector,
-    "1688": AlibabaCollector,
-}
-
-# 各平台登录页URL
-LOGIN_URLS = {
-    "xianyu": "https://login.taobao.com/",
-    "pdd": "https://mobile.yangkeduo.com/",
-    "jd": "https://passport.jd.com/new/login.aspx",
-    "1688": "https://login.1688.com/member/marketSigninJump.htm",
-}
 
 
 def is_valid_url(url: str) -> bool:
@@ -41,56 +24,6 @@ def is_valid_url(url: str) -> bool:
         return False
     pattern = r'^https?://[^\s<>"{}|\\^`\[\]]+$'
     return bool(re.match(pattern, url, re.IGNORECASE))
-
-
-class LoginWorker(QThread):
-    """登录工作线程"""
-    progress = pyqtSignal(str)
-    finished_login = pyqtSignal(bool)
-
-    def __init__(self, platform):
-        super().__init__()
-        self.platform = platform
-
-    def run(self):
-        try:
-            cls = COLLECTOR_CLASSES.get(self.platform)
-            if not cls:
-                self.progress.emit(f"不支持的平台: {self.platform}")
-                self.finished_login.emit(False)
-                return
-
-            def on_progress(msg):
-                self.progress.emit(msg)
-
-            collector = cls(on_progress=on_progress)
-            self.progress.emit(f"正在启动 {self.platform} 登录...")
-            result = collector.ensure_login(timeout=300)
-            self.finished_login.emit(result)
-        except Exception as e:
-            self.progress.emit(f"❌ 登录失败: {e}")
-            self.finished_login.emit(False)
-
-
-class CheckLoginWorker(QThread):
-    """检查登录状态线程"""
-    finished_check = pyqtSignal(bool)
-
-    def __init__(self, platform):
-        super().__init__()
-        self.platform = platform
-
-    def run(self):
-        try:
-            cls = COLLECTOR_CLASSES.get(self.platform)
-            if not cls:
-                self.finished_check.emit(False)
-                return
-            collector = cls()
-            result = collector.check_login_status()
-            self.finished_check.emit(result)
-        except Exception:
-            self.finished_check.emit(False)
 
 
 class CollectWorker(QThread):
@@ -197,36 +130,6 @@ class CollectTab(QWidget):
         self.platform_combo.addItem("🏭 阿里巴巴(1688)", "1688")
         self.platform_combo.currentIndexChanged.connect(self._on_platform_changed)
         platform_layout.addWidget(self.platform_combo)
-
-        # 登录状态标签
-        self.login_status_label = QLabel("🔘 未检查")
-        self.login_status_label.setStyleSheet("color: #999; font-size: 13px; padding: 2px 8px;")
-        platform_layout.addWidget(self.login_status_label)
-
-        # 登录按钮
-        self.login_btn = QPushButton("🔐 登录账号")
-        self.login_btn.setMinimumHeight(36)
-        self.login_btn.setStyleSheet(
-            "QPushButton { background: #FF9800; color: white; "
-            "border-radius: 4px; padding: 6px 16px; font-size: 13px; }"
-            "QPushButton:hover { background: #F57C00; }"
-            "QPushButton:disabled { background: #bbb; }"
-        )
-        self.login_btn.clicked.connect(self._do_login)
-        platform_layout.addWidget(self.login_btn)
-
-        # 检查登录状态按钮
-        self.check_login_btn = QPushButton("🔄 检查状态")
-        self.check_login_btn.setMinimumHeight(36)
-        self.check_login_btn.setStyleSheet(
-            "QPushButton { background: #607D8B; color: white; "
-            "border-radius: 4px; padding: 6px 16px; font-size: 13px; }"
-            "QPushButton:hover { background: #455A64; }"
-            "QPushButton:disabled { background: #bbb; }"
-        )
-        self.check_login_btn.clicked.connect(self._check_login)
-        platform_layout.addWidget(self.check_login_btn)
-
         platform_layout.addStretch()
         layout.addWidget(platform_group)
 
@@ -331,71 +234,6 @@ class CollectTab(QWidget):
         hints = PLATFORM_HINTS.get(platform, PLATFORM_HINTS["xianyu"])
         mode = "keyword" if self.keyword_radio.isChecked() else "link"
         self.input_field.setPlaceholderText(hints[mode])
-        # 重置登录状态
-        self.login_status_label.setText("🔘 未检查")
-        self.login_status_label.setStyleSheet("color: #999; font-size: 13px; padding: 2px 8px;")
-
-    def _do_login(self):
-        """启动登录流程"""
-        if not self.main_window.is_licensed():
-            QMessageBox.warning(self, "未激活", "请先在设置页面激活License后使用")
-            return
-
-        platform = self.platform_combo.currentData()
-        platform_name = self.platform_combo.currentText()
-
-        self.login_btn.setEnabled(False)
-        self.check_login_btn.setEnabled(False)
-        self.start_btn.setEnabled(False)
-        self.login_status_label.setText("⏳ 登录中...")
-        self.login_status_label.setStyleSheet("color: #FF9800; font-size: 13px; padding: 2px 8px;")
-        self._append_log(f"正在启动 {platform_name} 登录流程...")
-
-        self.login_worker = LoginWorker(platform)
-        self.login_worker.progress.connect(self._on_login_progress)
-        self.login_worker.finished_login.connect(self._on_login_finished)
-        self.login_worker.start()
-
-    def _check_login(self):
-        """检查当前平台登录状态"""
-        platform = self.platform_combo.currentData()
-        self.check_login_btn.setEnabled(False)
-        self.login_status_label.setText("⏳ 检查中...")
-        self.login_status_label.setStyleSheet("color: #FF9800; font-size: 13px; padding: 2px 8px;")
-
-        self.check_worker = CheckLoginWorker(platform)
-        self.check_worker.finished_check.connect(self._on_check_login_finished)
-        self.check_worker.start()
-
-    def _on_login_progress(self, msg):
-        self._append_log(msg)
-
-    def _on_login_finished(self, success):
-        self.login_btn.setEnabled(True)
-        self.check_login_btn.setEnabled(True)
-        self.start_btn.setEnabled(True)
-
-        if success:
-            self.login_status_label.setText("✅ 已登录")
-            self.login_status_label.setStyleSheet("color: #4CAF50; font-size: 13px; padding: 2px 8px; font-weight: bold;")
-            self._append_log("✅ 登录成功！现在可以开始采集了")
-            QMessageBox.information(self, "登录成功", "登录成功！登录态已保存。\n现在可以开始采集了。")
-        else:
-            self.login_status_label.setText("❌ 未登录")
-            self.login_status_label.setStyleSheet("color: #f44336; font-size: 13px; padding: 2px 8px;")
-            self._append_log("❌ 登录失败或超时")
-            QMessageBox.warning(self, "登录失败", "登录失败或超时，请重试。")
-
-    def _on_check_login_finished(self, logged_in):
-        self.check_login_btn.setEnabled(True)
-        if logged_in:
-            self.login_status_label.setText("✅ 已登录")
-            self.login_status_label.setStyleSheet("color: #4CAF50; font-size: 13px; padding: 2px 8px; font-weight: bold;")
-            self._append_log("✅ 当前平台已登录")
-        else:
-            self.login_status_label.setText("❌ 未登录")
-            self.login_status_label.setStyleSheet("color: #f44336; font-size: 13px; padding: 2px 8px;")
-            self._append_log("⚠️ 当前平台未登录，请先点击'登录账号'")
 
     def _on_mode_changed(self, btn_id, checked):
         if not checked:
@@ -460,35 +298,21 @@ class CollectTab(QWidget):
         self._append_log(msg)
 
     def _on_finished(self, items):
-        normalized_items = []
         for item in items:
             try:
-                item = ensure_full_product_package(item)
                 db_id = db.save_product(item)
                 item["db_id"] = db_id
-                normalized_items.append(item)
             except Exception as e:
                 print(f"保存商品失败: {e}")
 
-        export_dir = ""
-        if normalized_items:
-            try:
-                export_dir = export_products_package(normalized_items)
-            except Exception as e:
-                self._append_log(f"⚠ 商品包导出失败: {e}")
-
-        self.main_window.set_items(normalized_items)
+        self.main_window.set_items(items)
         self._reset_ui()
-        total_imgs = sum(len(it.get("local_images", [])) for it in normalized_items)
-        total_skus = sum(len(it.get("sku_list", [])) for it in normalized_items)
-        self._append_log(f"\n✅ 采集完成！共 {len(normalized_items)} 个商品，{total_skus} 个SKU，{total_imgs} 张图片（已MD5去重）")
+        total_imgs = sum(len(it.get("local_images", [])) for it in items)
+        self._append_log(f"\n✅ 采集完成！共 {len(items)} 个商品，{total_imgs} 张图片（已MD5去重）")
         self._append_log(f"💾 数据已保存到本地数据库，关闭软件不会丢失")
-        if export_dir:
-            self._append_log(f"📦 商品包已导出: {export_dir}")
         QMessageBox.information(
             self, "完成",
-            f"采集完成，共 {len(normalized_items)} 个商品，{total_skus} 个SKU，{total_imgs} 张图片\n数据已自动保存"
-            + (f"\n\n商品包已导出:\n{export_dir}" if export_dir else "")
+            f"采集完成，共 {len(items)} 个商品，{total_imgs} 张图片\n数据已自动保存"
         )
 
     def _on_error(self, msg):

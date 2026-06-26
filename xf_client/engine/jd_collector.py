@@ -15,6 +15,8 @@ from config import IMAGE_DIR
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.browser_config import get_chromium_options, check_browser_available
 
+JD_PROFILE_DIR = os.path.join(os.path.expanduser("~"), ".xf_jd_collector_profile")
+
 
 class JDCollector:
     """京东商品采集器
@@ -47,7 +49,8 @@ class JDCollector:
         ok, msg = check_browser_available()
         if not ok:
             raise Exception(f"浏览器检查失败: {msg}")
-        co, _port = get_chromium_options()
+        os.makedirs(JD_PROFILE_DIR, exist_ok=True)
+        co, _port = get_chromium_options(user_data_dir=JD_PROFILE_DIR)
         # 反检测参数
         co.set_argument("--disable-blink-features=AutomationControlled")
         co.set_argument("--no-sandbox")
@@ -58,6 +61,75 @@ class JDCollector:
             "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
             "Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3]});"
         )
+
+    def _is_logged_in(self) -> bool:
+        """检查京东登录态"""
+        try:
+            url = self.tab.url or ""
+            if "login" in url.lower() or "passport" in url.lower():
+                return False
+            result = self.tab.run_js("""
+            var c = document.cookie || '';
+            return c.includes('thor') || c.includes('pin') ||
+                   c.includes('pinId') || c.includes('pt_key');
+            """)
+            return bool(result)
+        except Exception:
+            return False
+
+    def _ensure_login(self, timeout: int = 300) -> bool:
+        """确保已登录，未登录则等待用户扫码"""
+        self._log("检查登录状态...")
+        self.tab.get("https://www.jd.com/")
+        time.sleep(3)
+        if self._is_logged_in():
+            self._log("✓ 京东已登录")
+            return True
+
+        self._log("=" * 50)
+        self._log("⚠️  请在浏览器中登录京东账号")
+        self._log("   登录成功后采集将自动继续")
+        self._log("=" * 50)
+
+        self.tab.get("https://passport.jd.com/new/login.aspx")
+        for i in range(timeout):
+            time.sleep(1)
+            try:
+                url = self.tab.url or ""
+                if "login" not in url.lower() and "passport" not in url.lower():
+                    time.sleep(2)
+                    if self._is_logged_in():
+                        self._log("✓ 登录成功！登录态已保存")
+                        return True
+            except Exception:
+                pass
+            if i % 30 == 0 and i > 0:
+                self._log(f"等待登录... ({i}s)")
+        self._log("❌ 登录超时")
+        return False
+
+    def ensure_login(self, timeout: int = 300) -> bool:
+        """独立登录入口（采集前调用）"""
+        try:
+            self._init_browser()
+            return self._ensure_login(timeout)
+        except Exception as e:
+            self._log(f"登录初始化失败: {e}")
+            return False
+        finally:
+            self._close_browser()
+
+    def check_login_status(self) -> bool:
+        """检查登录态（不阻塞）"""
+        try:
+            self._init_browser()
+            self.tab.get("https://www.jd.com/")
+            time.sleep(3)
+            return self._is_logged_in()
+        except Exception:
+            return False
+        finally:
+            self._close_browser()
 
     def _close_browser(self):
         if self.chromium:
@@ -371,6 +443,9 @@ class JDCollector:
             self.seen_ids = set()
             self.seen_img_md5 = set()
 
+            if not self._ensure_login():
+                raise Exception("登录超时，请先点击'登录账号'按钮完成登录")
+
             self._log(f"正在搜索京东: {keyword}")
             links = self._collect_search_links(keyword, count)
             self._log(f"找到 {len(links)} 个商品，开始逐个采集详情...")
@@ -401,6 +476,9 @@ class JDCollector:
             self._init_browser()
             self.items = []
             self.seen_img_md5 = set()
+
+            if not self._ensure_login():
+                raise Exception("登录超时，请先点击'登录账号'按钮完成登录")
 
             self._log(f"采集京东商品: {url}")
             item = self._collect_detail(url)
