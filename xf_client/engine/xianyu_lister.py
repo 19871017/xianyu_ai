@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any, Callable
 
@@ -513,6 +514,36 @@ class XianyuLister:
         out["error"] = "点击发布后未检测到成功跳转或提示（可能仍有必填项未完成）"
         return out
 
+    def _capture_published_id(self, timeout: int = 8) -> str:
+        """发布成功后尝试抓取闲鱼新商品 id（用于订单回溯）。
+
+        闲鱼发布成功通常跳转到 item/详情或个人在售页，商品 id 多出现在
+        URL（item?id=xxx / item/xxx）或页面链接中。抓不到返回空串。
+        """
+        id_re = re.compile(r"item[/?](?:id=)?(\d{8,})")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                url = self.tab.url or ""
+            except Exception:
+                url = ""
+            m = id_re.search(url)
+            if m:
+                return m.group(1)
+            # 退而求其次：从页面里第一个商品详情链接抓 id。
+            try:
+                href = self.tab.run_js(r"""
+                var a = document.querySelector('a[href*="item?id="], a[href*="item/"]');
+                return a ? a.href : '';
+                """) or ""
+            except Exception:
+                href = ""
+            m = id_re.search(href)
+            if m:
+                return m.group(1)
+            time.sleep(1.0)
+        return ""
+
     # ── 上架主流程 ────────────────────────────────────────────
     def fill_product(self, item: dict[str, Any], dry_run: bool = True) -> dict[str, Any]:
         """把单个商品数据填进闲鱼发布页。
@@ -609,7 +640,12 @@ class XianyuLister:
             if pub["ok"]:
                 result["ok"] = True
                 result["published"] = True
-                self.log("✅ 已提交发布，闲鱼后台稍后可见该商品。")
+                xy_id = self._capture_published_id()
+                if xy_id:
+                    result["xianyu_item_id"] = xy_id
+                    self.log(f"✅ 已提交发布，闲鱼商品 id：{xy_id}")
+                else:
+                    self.log("✅ 已提交发布，闲鱼后台稍后可见该商品。")
             else:
                 result["ok"] = False
                 result["published"] = False

@@ -197,6 +197,30 @@ def format_attributes(attrs: dict[str, Any]) -> str:
     return "；".join(parts) + ("；" if parts else "")
 
 
+# 源平台域名 → 平台标识，用于卖出后回上游一键代采。
+_SOURCE_PLATFORM_HOSTS = (
+    ("1688.com", "1688"),
+    ("taobao.com", "taobao"),
+    ("tmall.com", "taobao"),
+    ("jd.com", "jd"),
+    ("yangkeduo.com", "pdd"),
+    ("pinduoduo.com", "pdd"),
+    ("goofish.com", "xianyu"),
+    ("goofish.pro", "xianyu"),
+)
+
+
+def _infer_source_platform(url: str) -> str:
+    """根据源商品链接推断平台标识，识别不出返回空串。"""
+    if not url or not isinstance(url, str):
+        return ""
+    low = url.lower()
+    for host, platform in _SOURCE_PLATFORM_HOSTS:
+        if host in low:
+            return platform
+    return ""
+
+
 def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
     sku_list = item.get("sku_list") or item.get("skus") or []
     if isinstance(sku_list, str):
@@ -259,6 +283,18 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
             "merchant_sku": sku.get("merchant_sku") or sku.get("商家SKU") or "",
             "barcode": sku.get("barcode") or sku.get("SKU商品条形码") or "",
             "sku_attrs": sku.get("sku_attrs") or sku.get("SKU属性") or {},
+            "source_sku_id": str(
+                sku.get("source_sku_id")
+                or sku.get("skuId")
+                or sku.get("sku_id")
+                or sku.get("specId")
+                or sku.get("merchant_sku")
+                or sku.get("商家SKU")
+                or ""
+            ),
+            "source_spec": _clean_text(
+                sku.get("source_spec") or sku.get("specAttrs") or "", 120
+            ),
             "raw": sku.get("raw") or {},
         })
 
@@ -273,6 +309,8 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
             "merchant_sku": "",
             "barcode": "",
             "sku_attrs": {},
+            "source_sku_id": "",
+            "source_spec": "",
             "raw": {},
         })
 
@@ -312,6 +350,20 @@ def ensure_full_product_package(item: dict[str, Any]) -> dict[str, Any]:
     item["article_no"] = _clean_text(article_no, 80)
     item["origin"] = _clean_text(origin, 80)
     item["ship_from"] = _clean_text(ship_from, 80)
+
+    # 来源追溯：平台 / 源商品链接 / 源商品 id（用于卖出后回上游一键代采）。
+    source_url = item.get("source_url") or item.get("link") or ""
+    source_item_id = str(item.get("source_item_id") or "")
+    source_platform = (
+        item.get("source_platform")
+        or item.get("platform")
+        or _infer_source_platform(source_url)
+        or ""
+    )
+    item["source_url"] = source_url
+    item["source_item_id"] = source_item_id
+    item["source_platform"] = source_platform
+    item["source_seller"] = item.get("source_seller") or item.get("seller") or ""
 
     sku_list = normalize_sku_list(item)
     item["sku_list"] = sku_list
@@ -372,6 +424,12 @@ def ensure_full_product_package(item: dict[str, Any]) -> dict[str, Any]:
         "payment_limit": item.get("payment_limit", ""),
         "origin": item.get("origin", ""),
         "ship_from": item.get("ship_from", ""),
+        "source": {
+            "platform": item.get("source_platform", ""),
+            "url": item.get("source_url", ""),
+            "item_id": item.get("source_item_id", ""),
+            "seller": item.get("source_seller", ""),
+        },
         "barcode": item.get("barcode", ""),
         "gross_weight_kg": item.get("gross_weight_kg", ""),
         "package_length_mm": item.get("package_length_mm", ""),

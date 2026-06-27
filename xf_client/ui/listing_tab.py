@@ -128,6 +128,9 @@ class ListingWorker(QThread):
                     self.item_done.emit(i, success, error)
                     if success and not self.dry_run and item.get("db_id"):
                         db.update_product_status(item["db_id"], ch["status"])
+                        xy_id = result.get("xianyu_item_id") or ""
+                        if xy_id:
+                            db.set_xianyu_item_id(item["db_id"], xy_id)
                 except Exception as e:
                     error_msg = str(e)
                     on_progress(f"  ✗ 上架失败: {error_msg[:80]}")

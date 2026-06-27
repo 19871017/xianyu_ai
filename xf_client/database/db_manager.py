@@ -54,6 +54,7 @@ class DatabaseManager:
                     attributes TEXT,
                     tags TEXT,
                     status TEXT DEFAULT 'collected',
+                    xianyu_item_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -71,6 +72,13 @@ class DatabaseManager:
                     buyer_address TEXT,
                     order_status TEXT DEFAULT 'pending',
                     order_amount TEXT,
+                    buyer_spec TEXT,
+                    quantity INTEGER DEFAULT 1,
+                    source_platform TEXT,
+                    source_url TEXT,
+                    source_item_id TEXT,
+                    source_sku_id TEXT,
+                    match_status TEXT DEFAULT 'unmatched',
                     upstream_order_id TEXT,
                     upstream_status TEXT,
                     notes TEXT,
@@ -125,6 +133,7 @@ class DatabaseManager:
             """)
             # 给老数据库做 migration（字段不存在时 ALTER）
             self._migrate_monitor_table(conn)
+            self._migrate_trace_columns(conn)
 
             conn.commit()
 
@@ -146,6 +155,35 @@ class DatabaseManager:
                 if col not in existing:
                     conn.execute(
                         f"ALTER TABLE monitor_snapshots ADD COLUMN {col} {definition}"
+                    )
+        except Exception:
+            pass  # 不阻塞启动
+
+    def _migrate_trace_columns(self, conn):
+        """老数据库兼容：products / orders 补齐来源追溯与规格字段。"""
+        try:
+            prod_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(products)")
+            }
+            if "xianyu_item_id" not in prod_cols:
+                conn.execute("ALTER TABLE products ADD COLUMN xianyu_item_id TEXT")
+
+            order_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(orders)")
+            }
+            new_order_cols = {
+                "buyer_spec": "TEXT",
+                "quantity": "INTEGER DEFAULT 1",
+                "source_platform": "TEXT",
+                "source_url": "TEXT",
+                "source_item_id": "TEXT",
+                "source_sku_id": "TEXT",
+                "match_status": "TEXT DEFAULT 'unmatched'",
+            }
+            for col, definition in new_order_cols.items():
+                if col not in order_cols:
+                    conn.execute(
+                        f"ALTER TABLE orders ADD COLUMN {col} {definition}"
                     )
         except Exception:
             pass  # 不阻塞启动
@@ -174,6 +212,7 @@ class DatabaseManager:
                 "seller_credit": item.get("seller_credit", ""),
                 "source_url": item.get("source_url", item.get("link", "")),
                 "source_item_id": item.get("source_item_id", ""),
+                "xianyu_item_id": item.get("xianyu_item_id", ""),
                 "local_images": json.dumps(item.get("local_images", []), ensure_ascii=False),
                 "attributes": json.dumps(item.get("attributes", {}), ensure_ascii=False),
                 "tags": json.dumps(item.get("tags", []), ensure_ascii=False),
@@ -187,6 +226,8 @@ class DatabaseManager:
                     UPDATE products SET
                         platform=:platform,
                         ai_title=:ai_title,
+                        source_url=:source_url,
+                        source_item_id=:source_item_id,
                         new_price=:new_price,
                         price_markup_pct=:price_markup_pct,
                         local_images=:local_images,
@@ -202,12 +243,12 @@ class DatabaseManager:
                     INSERT INTO products (
                         item_id, platform, original_title, ai_title, description,
                         original_price, new_price, price_markup_pct, wants, views,
-                        seller, seller_credit, source_url, source_item_id,
+                        seller, seller_credit, source_url, source_item_id, xianyu_item_id,
                         local_images, attributes, tags, status, updated_at
                     ) VALUES (
                         :item_id, :platform, :original_title, :ai_title, :description,
                         :original_price, :new_price, :price_markup_pct, :wants, :views,
-                        :seller, :seller_credit, :source_url, :source_item_id,
+                        :seller, :seller_credit, :source_url, :source_item_id, :xianyu_item_id,
                         :local_images, :attributes, :tags, :status, :updated_at
                     )
                 """, data)
@@ -247,6 +288,16 @@ class DatabaseManager:
                 (status, datetime.now().isoformat(), product_id)
             )
 
+    def set_xianyu_item_id(self, product_id: int, xianyu_item_id: str):
+        """发布到闲鱼成功后回写闲鱼商品 id（用于卖出订单回溯到本地商品）。"""
+        if not xianyu_item_id:
+            return
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE products SET xianyu_item_id = ?, updated_at = ? WHERE id = ?",
+                (str(xianyu_item_id), datetime.now().isoformat(), product_id),
+            )
+
     def delete_product(self, product_id: int):
         with self._get_conn() as conn:
             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
@@ -270,6 +321,7 @@ class DatabaseManager:
             "seller_credit": row["seller_credit"],
             "source_url": row["source_url"],
             "source_item_id": row["source_item_id"],
+            "xianyu_item_id": ((row["xianyu_item_id"] if "xianyu_item_id" in row.keys() else "") or ""),
             "local_images": json.loads(row["local_images"] or "[]"),
             "attributes": attrs,
             "tags": json.loads(row["tags"] or "[]"),
@@ -285,26 +337,74 @@ class DatabaseManager:
     # ═══════════════════ 订单操作 ═══════════════════
 
     def save_order(self, order: Dict) -> int:
+        """保存订单。platform_order_id 已存在则更新，否则插入（幂等抓单）。"""
         with self._get_conn() as conn:
-            cursor = conn.execute("""
-                INSERT INTO orders (
-                    product_id, platform_order_id, platform, buyer_name,
-                    buyer_phone, buyer_address, order_status, order_amount,
-                    upstream_order_id, upstream_status, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
+            poid = order.get("platform_order_id") or ""
+            existing = None
+            if poid:
+                existing = conn.execute(
+                    "SELECT id FROM orders WHERE platform_order_id = ?", (poid,)
+                ).fetchone()
+            data = (
                 order.get("product_id"),
-                order.get("platform_order_id"),
+                poid,
                 order.get("platform", "xianyu"),
                 order.get("buyer_name", ""),
                 order.get("buyer_phone", ""),
                 order.get("buyer_address", ""),
                 order.get("order_status", "pending"),
                 order.get("order_amount", ""),
+                order.get("buyer_spec", ""),
+                int(order.get("quantity") or 1),
+                order.get("source_platform", ""),
+                order.get("source_url", ""),
+                order.get("source_item_id", ""),
+                order.get("source_sku_id", ""),
+                order.get("match_status", "unmatched"),
                 order.get("upstream_order_id", ""),
                 order.get("upstream_status", ""),
                 order.get("notes", ""),
-            ))
+            )
+            if existing:
+                conn.execute("""
+                    UPDATE orders SET
+                        product_id=?, platform=?, buyer_name=?, buyer_phone=?,
+                        buyer_address=?, order_status=?, order_amount=?, buyer_spec=?,
+                        quantity=?, source_platform=?, source_url=?, source_item_id=?,
+                        source_sku_id=?, match_status=?, upstream_order_id=?,
+                        upstream_status=?, notes=?, updated_at=?
+                    WHERE id=?
+                """, (
+                    order.get("product_id"),
+                    order.get("platform", "xianyu"),
+                    order.get("buyer_name", ""),
+                    order.get("buyer_phone", ""),
+                    order.get("buyer_address", ""),
+                    order.get("order_status", "pending"),
+                    order.get("order_amount", ""),
+                    order.get("buyer_spec", ""),
+                    int(order.get("quantity") or 1),
+                    order.get("source_platform", ""),
+                    order.get("source_url", ""),
+                    order.get("source_item_id", ""),
+                    order.get("source_sku_id", ""),
+                    order.get("match_status", "unmatched"),
+                    order.get("upstream_order_id", ""),
+                    order.get("upstream_status", ""),
+                    order.get("notes", ""),
+                    datetime.now().isoformat(),
+                    existing["id"],
+                ))
+                return existing["id"]
+            cursor = conn.execute("""
+                INSERT INTO orders (
+                    product_id, platform_order_id, platform, buyer_name,
+                    buyer_phone, buyer_address, order_status, order_amount,
+                    buyer_spec, quantity, source_platform, source_url,
+                    source_item_id, source_sku_id, match_status,
+                    upstream_order_id, upstream_status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, data)
             return cursor.lastrowid
 
     def get_all_orders(self, status: str = None) -> List[Dict]:
