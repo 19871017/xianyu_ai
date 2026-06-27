@@ -434,6 +434,85 @@ class XianyuLister:
         out["ok"] = filled > 0
         return out
 
+    # ── 发布 ──────────────────────────────────────────────────
+    def _click_publish(self, timeout: int = 20) -> dict[str, Any]:
+        """点击发布页底部「发布」按钮并校验提交结果。
+
+        闲鱼发布页底部按钮文本为「发布」（class 后缀为 hash，故按文本匹配）。
+        点击后页面会跳转/弹层或出现校验提示。返回 {ok, error}。
+        """
+        out = {"ok": False, "error": ""}
+        # 找文本恰为「发布」的可见按钮（排除「添加规格类型」等）。
+        find_js = r"""
+        var btns = document.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++) {
+          var b = btns[i];
+          var t = (b.innerText || '').trim();
+          var r = b.getBoundingClientRect();
+          if (t === '发布' && r.width > 0 && r.height > 0) return true;
+        }
+        return false;
+        """
+        try:
+            if not self.tab.run_js(find_js):
+                out["error"] = "未找到「发布」按钮"
+                return out
+        except Exception as e:
+            out["error"] = f"查找发布按钮异常: {e}"
+            return out
+
+        btn = None
+        try:
+            for b in self.tab.eles("css:button"):
+                if (b.text or "").strip() == "发布":
+                    btn = b
+                    break
+        except Exception as e:
+            out["error"] = f"定位发布按钮异常: {e}"
+            return out
+        if not btn:
+            out["error"] = "未定位到发布按钮元素"
+            return out
+
+        try:
+            btn.click(by_js=False)
+        except Exception as e:
+            out["error"] = f"点击发布按钮异常: {e}"
+            return out
+
+        # 校验提交结果：等待 URL 离开 /publish，或出现成功/失败提示。
+        deadline = time.time() + timeout
+        check_js = r"""
+        var msg = '';
+        document.querySelectorAll('.ant-message-notice-content, .ant-form-item-explain-error, [class*=toast], [class*=Toast]').forEach(function(el){
+          var t = (el.innerText || '').trim();
+          if (t) msg += t + ' | ';
+        });
+        return msg;
+        """
+        while time.time() < deadline:
+            time.sleep(1.0)
+            try:
+                url = self.tab.url or ""
+            except Exception:
+                url = ""
+            if url and "/publish" not in url:
+                out["ok"] = True
+                return out
+            try:
+                msg = (self.tab.run_js(check_js) or "").strip()
+            except Exception:
+                msg = ""
+            if msg:
+                # 含「成功」视为成功，否则视为校验未通过。
+                if "成功" in msg or "已发布" in msg:
+                    out["ok"] = True
+                    return out
+                out["error"] = msg[:200]
+                return out
+        out["error"] = "点击发布后未检测到成功跳转或提示（可能仍有必填项未完成）"
+        return out
+
     # ── 上架主流程 ────────────────────────────────────────────
     def fill_product(self, item: dict[str, Any], dry_run: bool = True) -> dict[str, Any]:
         """把单个商品数据填进闲鱼发布页。
@@ -518,9 +597,24 @@ class XianyuLister:
                     if self._fill_price_by_index(1, f"{float(market):.2f}"):
                         result["filled"].append("原价")
 
-            result["ok"] = True
             if dry_run:
+                result["ok"] = True
                 self.log("✅ 已填写闲鱼发布表单（dry-run，未点「发布」）。请在浏览器中核对后手动发布。")
+                return result
+
+            # 非 dry-run：真正点「发布」按钮并校验提交结果。
+            self.log("正在提交发布…")
+            pub = self._click_publish()
+            result["publish"] = pub
+            if pub["ok"]:
+                result["ok"] = True
+                result["published"] = True
+                self.log("✅ 已提交发布，闲鱼后台稍后可见该商品。")
+            else:
+                result["ok"] = False
+                result["published"] = False
+                result["error"] = f"发布未成功: {pub.get('error')}"
+                self.log(f"❌ {result['error']}")
             return result
         except Exception as e:
             result["error"] = str(e)
