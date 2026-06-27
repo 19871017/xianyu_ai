@@ -675,11 +675,44 @@ class TaobaoCollector:
             item_dir = os.path.join(IMAGE_DIR, "taobao_" + sanitize_filename(item_id or title[:20]))
             ensure_dir(item_dir)
 
-            local_images = []
+            main_dir = os.path.join(item_dir, "main")
+            ensure_dir(main_dir)
+            main_images = []
             for idx, img_url in enumerate(image_urls[:30]):
-                result = self._download_and_dedup_image(img_url, item_dir, idx)
+                result = self._download_and_dedup_image(img_url, main_dir, idx)
                 if result:
-                    local_images.append(result["path"])
+                    main_images.append(result["path"])
+
+            # ── 详情图 (商品描述长图区域, DOM 抓取) ──
+            detail_image_urls = []
+            try:
+                detail_raw = tab.run_js('''
+                    try {
+                        var imgs = [];
+                        var seen = new Set();
+                        var els = document.querySelectorAll('#description img, [class*="desc-root"] img, [class*="descV8"] img, [class*="detail-desc"] img, #J_DivItemDesc img');
+                        els.forEach(function(img) {
+                            var src = img.src || img.dataset.src || img.getAttribute('data-ks-lazyload') || '';
+                            if(src && src.length > 40 && src.indexOf('alicdn') >= 0 && !seen.has(src)) {
+                                seen.add(src);
+                                imgs.push(src);
+                            }
+                        });
+                        return JSON.stringify(imgs.slice(0, 25));
+                    } catch(e) { return '[]'; }
+                ''') or '[]'
+                detail_image_urls = json.loads(detail_raw) if isinstance(detail_raw, str) else []
+            except Exception:
+                detail_image_urls = []
+
+            detail_dir = os.path.join(item_dir, "detail")
+            ensure_dir(detail_dir)
+            detail_images = []
+            for idx, img_url in enumerate(detail_image_urls[:25]):
+                result = self._download_and_dedup_image(img_url, detail_dir, idx)
+                if result:
+                    detail_images.append(result["path"])
+            local_images = main_images + detail_images
 
             # ── 下载 SKU 规格图(独立去重池) ──
             if sku_list:
@@ -737,8 +770,12 @@ class TaobaoCollector:
                 "original_price": str(price_float) if price_float else "0",
                 "price": price_float,
                 "sku_list": sku_list,
-                "image_urls": image_urls,
+                "image_urls": (image_urls or []) + (detail_image_urls or []),
+                "main_image_urls": image_urls,
+                "detail_image_urls": detail_image_urls,
                 "local_images": local_images,
+                "main_images": main_images,
+                "detail_images": detail_images,
                 "image_dir": item_dir,
                 "attributes": attrs_dict,
                 "seller": seller,
@@ -753,7 +790,7 @@ class TaobaoCollector:
 
             self._log(
                 f"  ✓ 标题: {title[:40]}  价格: ¥{price_float}  "
-                f"图片: {len(local_images)}张  SKU: {len(sku_list)}个"
+                f"主图: {len(main_images)}张  详情图: {len(detail_images)}张  SKU: {len(sku_list)}个"
             )
             return item
 
