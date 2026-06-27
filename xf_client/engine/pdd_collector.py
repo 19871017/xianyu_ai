@@ -411,19 +411,35 @@ class PddCollector:
         except Exception:
             return 0.0
 
+    # 商品的强特征字段：必须命中其一才认定为「真商品」，
+    # 避免把搜索热词等字符串列表 / 弱特征列表误判为商品列表
+    GOODS_STRONG_KEYS = frozenset([
+        "goods_id", "goodsId", "item_id", "itemId",
+        "min_group_price", "minGroupPrice",
+        "group_price", "groupPrice",
+    ])
+
+    def _is_goods_list(self, value) -> bool:
+        """判断一个值是否为真正的商品列表。
+
+        要求：非空 list、首元素是 dict、且 dict 含商品强特征字段。
+        这样可排除拼多多搜索热词接口返回的字符串列表
+        （如 ['耳机', '丝袜', ...]）以及其它弱特征列表。
+        """
+        if not isinstance(value, list) or not value:
+            return False
+        first = value[0]
+        if not isinstance(first, dict):
+            return False
+        return bool(self.GOODS_STRONG_KEYS & set(first.keys()))
+
     def _find_goods_list(self, data, depth: int = 0) -> list:
         """递归从嵌套 JSON 中找商品列表"""
         if depth > 5:
             return []
-        if isinstance(data, list) and len(data) > 0:
-            if isinstance(data[0], dict):
-                first = data[0]
-                if any(k in first for k in [
-                    "goods_id", "goodsId", "item_id", "itemId",
-                    "goods_name", "goodsName", "name", "title"
-                ]):
-                    return data
-        elif isinstance(data, dict):
+        if self._is_goods_list(data):
+            return data
+        if isinstance(data, dict):
             # 优先路径
             for key_path in [
                 ["result", "goods_list"], ["result", "items"], ["result", "list"],
@@ -436,7 +452,7 @@ class PddCollector:
                 try:
                     for k in key_path:
                         cur = cur[k]
-                    if isinstance(cur, list) and len(cur) > 0:
+                    if self._is_goods_list(cur):
                         return cur
                 except (KeyError, TypeError):
                     pass
