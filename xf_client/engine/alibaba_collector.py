@@ -778,11 +778,14 @@ class AlibabaCollector:
                 } catch(e) { return ''; }
             ''') or ""
 
-            # ── 图片 (主图 + 详情图) ──
-            image_urls_raw = tab.run_js('''
+            # ── 图片 (主图/详情图分离) ──
+            image_groups_raw = tab.run_js('''
                 try {
-                    var imgs = [];
+                    var out = {main: [], detail: []};
                     var seen = new Set();
+                    function push(arr, src) {
+                        if(src && src.length > 30 && !seen.has(src)) { seen.add(src); arr.push(src); }
+                    }
                     // 主图: 轮播/画廊区域
                     var mainSelectors = [
                         '.tab-attr img', '[class*="carousel"] img',
@@ -794,35 +797,47 @@ class AlibabaCollector:
                         var els = document.querySelectorAll(mainSelectors[s]);
                         els.forEach(function(img) {
                             var src = img.src || img.dataset.src || img.getAttribute('data-lazy-src') || '';
-                            if(src && src.length > 30 && !seen.has(src)) {
-                                seen.add(src);
-                                imgs.push(src);
-                            }
+                            push(out.main, src);
                         });
                     }
                     // 详情图: 详情描述区域
                     var detailEls = document.querySelectorAll('[class*="detail-content"] img, [class*="desc"] img, .content-detail img');
                     detailEls.forEach(function(img) {
                         var src = img.src || img.dataset.src || img.getAttribute('data-lazy-src') || '';
-                        if(src && src.length > 30 && !seen.has(src)) {
-                            seen.add(src);
-                            imgs.push(src);
-                        }
+                        push(out.detail, src);
                     });
-                    return JSON.stringify(imgs.slice(0, 30));
-                } catch(e) { return '[]'; }
-            ''') or '[]'
-            image_urls = json.loads(image_urls_raw) if isinstance(image_urls_raw, str) else []
+                    out.main = out.main.slice(0, 15);
+                    out.detail = out.detail.slice(0, 25);
+                    return JSON.stringify(out);
+                } catch(e) { return '{"main":[],"detail":[]}'; }
+            ''') or '{"main":[],"detail":[]}'
+            try:
+                _groups = json.loads(image_groups_raw) if isinstance(image_groups_raw, str) else {}
+            except Exception:
+                _groups = {}
+            main_image_urls = [u for u in (_groups.get("main") or []) if isinstance(u, str)]
+            detail_image_urls = [u for u in (_groups.get("detail") or []) if isinstance(u, str)]
+            image_urls = main_image_urls + detail_image_urls
 
-            # ── 下载图片 ──
+            # ── 下载图片 (主图/详情图分目录, 共用去重池避免重复) ──
             item_dir = os.path.join(IMAGE_DIR, "1688_" + sanitize_filename(item_id or title[:20]))
             ensure_dir(item_dir)
+            main_dir = os.path.join(item_dir, "main")
+            detail_dir = os.path.join(item_dir, "detail")
+            ensure_dir(main_dir)
+            ensure_dir(detail_dir)
 
-            local_images = []
-            for idx, img_url in enumerate(image_urls[:30]):
-                result = self._download_and_dedup_image(img_url, item_dir, idx)
+            main_images = []
+            for idx, img_url in enumerate(main_image_urls[:15]):
+                result = self._download_and_dedup_image(img_url, main_dir, idx)
                 if result:
-                    local_images.append(result["path"])
+                    main_images.append(result["path"])
+            detail_images = []
+            for idx, img_url in enumerate(detail_image_urls[:25]):
+                result = self._download_and_dedup_image(img_url, detail_dir, idx)
+                if result:
+                    detail_images.append(result["path"])
+            local_images = main_images + detail_images
 
             # ── 价格处理: 区间价格取最低 ──
             price_float = 0.0
@@ -890,7 +905,11 @@ class AlibabaCollector:
                 "price": price_float,
                 "sku_list": sku_list,
                 "image_urls": image_urls,
+                "main_image_urls": main_image_urls,
+                "detail_image_urls": detail_image_urls,
                 "local_images": local_images,
+                "main_images": main_images,
+                "detail_images": detail_images,
                 "image_dir": item_dir,
                 "attributes": attrs_dict,
                 "seller": seller,
@@ -905,7 +924,7 @@ class AlibabaCollector:
 
             self._log(
                 f"  ✓ 标题: {title[:40]}  价格: ¥{price_float}  "
-                f"销量: {sales}  图片: {len(local_images)}张  SKU: {len(sku_list)}个"
+                f"销量: {sales}  主图: {len(main_images)}张  详情图: {len(detail_images)}张  SKU: {len(sku_list)}个"
             )
             return item
 

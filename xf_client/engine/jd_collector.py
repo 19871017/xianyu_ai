@@ -10,6 +10,8 @@ import json
 import hashlib
 import os
 import requests
+
+from engine.jd_sku_parser import parse_jd_sku_list, extract_color_size_from_html
 from DrissionPage import Chromium
 from config import IMAGE_DIR
 from utils.helpers import ensure_dir, sanitize_filename
@@ -389,6 +391,25 @@ class JDCollector:
                 }
                 res.images = imgs.slice(0, 20);
 
+                // ── 详情图 (商品介绍长图区域) ──
+                var detailImgs = [];
+                document.querySelectorAll(
+                    '#J-detail-content img, .detail-content img, #product-detail-2 img, [class*="ssd-module"] img'
+                ).forEach(function(img) {
+                    var src = img.src || img.dataset.src || img.getAttribute('data-lazyload') || img.getAttribute('data-origin') || '';
+                    if (!src || src.length < 20) return;
+                    if (src.startsWith('//')) src = 'https:' + src;
+                    src = src.split('!')[0];
+                    if (!seen.has(src)) { seen.add(src); detailImgs.push(src); }
+                });
+                res.detail_images = detailImgs.slice(0, 25);
+
+                // ── 多规格 (pageConfig.product.colorSize) ──
+                try {
+                    var cs = (window.pageConfig && window.pageConfig.product && window.pageConfig.product.colorSize) || [];
+                    res.color_size = JSON.stringify(cs);
+                } catch(e) { res.color_size = '[]'; }
+
                 return JSON.stringify(res);
             } catch(e) { return JSON.stringify({error: e.toString()}); }
             """)
@@ -413,14 +434,39 @@ class JDCollector:
             except Exception:
                 attrs_dict = {}
 
-            # 下载图片
+            # ── 多规格 SKU 解析 ──
+            sku_list = []
+            try:
+                sku_list = parse_jd_sku_list(
+                    data.get("color_size") or "[]",
+                    base_price=price_float,
+                )
+                if not sku_list:
+                    # 兜底: 从页面 HTML 抠 colorSize
+                    cs = extract_color_size_from_html(self.tab.html or "")
+                    sku_list = parse_jd_sku_list(cs, base_price=price_float)
+            except Exception as e:
+                self._log(f"  ⚠ SKU 解析异常: {e}")
+
+            # ── 下载图片 (主图/详情图分目录, 共用去重池) ──
             item_dir = os.path.join(IMAGE_DIR, f"jd_{sanitize_filename(sku_id)}")
             ensure_dir(item_dir)
-            local_images = []
+            main_dir = os.path.join(item_dir, "main")
+            detail_dir = os.path.join(item_dir, "detail")
+            ensure_dir(main_dir)
+            ensure_dir(detail_dir)
+
+            main_images = []
             for idx, img_url in enumerate(data.get("images", [])[:15]):
-                saved = self._download_image(img_url, item_dir, idx)
+                saved = self._download_image(img_url, main_dir, idx)
                 if saved:
-                    local_images.append(saved)
+                    main_images.append(saved)
+            detail_images = []
+            for idx, img_url in enumerate(data.get("detail_images", [])[:25]):
+                saved = self._download_image(img_url, detail_dir, idx)
+                if saved:
+                    detail_images.append(saved)
+            local_images = main_images + detail_images
 
             item = {
                 "item_id": f"jd_{sku_id}",
@@ -430,8 +476,13 @@ class JDCollector:
                 "description": data.get("description", ""),
                 "original_price": str(price_float),
                 "price": price_float,
-                "image_urls": data.get("images", []),
+                "sku_list": sku_list,
+                "image_urls": (data.get("images", []) or []) + (data.get("detail_images", []) or []),
+                "main_image_urls": data.get("images", []),
+                "detail_image_urls": data.get("detail_images", []),
                 "local_images": local_images,
+                "main_images": main_images,
+                "detail_images": detail_images,
                 "image_dir": item_dir,
                 "attributes": attrs_dict,
                 "seller": data.get("shop", ""),
@@ -446,7 +497,8 @@ class JDCollector:
 
             self._log(
                 f"  ✓ {title[:40]}  ¥{price_float}"
-                f"  评价:{item['wants']}  图片:{len(local_images)}张"
+                f"  评价:{item['wants']}  主图:{len(main_images)}张"
+                f"  详情图:{len(detail_images)}张  SKU:{len(sku_list)}个"
             )
             return item
 
