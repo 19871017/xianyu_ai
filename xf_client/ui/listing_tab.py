@@ -32,6 +32,7 @@ from engine.xianyu_lister import XianyuLister
 from engine.price_manager import PriceManager
 from engine.product_package import ensure_full_product_package, import_product_package
 from database.db_manager import db
+from ui.product_edit_dialog import ProductEditDialog
 
 
 GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
@@ -639,33 +640,40 @@ class ListingTab(QWidget):
             }
             self.table.setItem(i, 5, QTableWidgetItem(status_map.get(status, status)))
 
-            edit_btn = QPushButton("详情")
+            edit_btn = QPushButton("✏️ 编辑")
             edit_btn.setMinimumHeight(28)
             edit_btn.setStyleSheet(
                 "QPushButton { background: #00897b; color: white; "
                 "border-radius: 3px; padding: 2px 8px; font-size: 11px; }"
                 "QPushButton:hover { background: #00796b; }"
             )
-            edit_btn.clicked.connect(lambda checked, idx=i: self._show_detail(idx))
+            edit_btn.clicked.connect(lambda checked, idx=i: self._edit_item(idx))
             self.table.setCellWidget(i, 6, edit_btn)
 
         self._update_selected_count()
 
-    def _show_detail(self, index: int):
+    def _edit_item(self, index: int):
+        """打开编辑弹窗，保存后落库并刷新列表。"""
         if index >= len(self.items):
             return
-        item = self.items[index]
-        sku_list = item.get("sku_list") or []
-        info = (
-            f"商品ID: {item.get('item_id', '')}\n"
-            f"来源平台: {SOURCE_PLATFORM_DISPLAY.get(item.get('platform'), item.get('platform', ''))}\n"
-            f"原始标题: {item.get('original_title') or item.get('title', '')}\n"
-            f"AI 标题: {item.get('ai_title', '（未改写）')}\n"
-            f"原价: ¥{item.get('original_price', '')}\n"
-            f"上架价: ¥{item.get('new_price') or item.get('price', '')}\n"
-            f"图片数: {len(item.get('local_images', []) or item.get('main_images', []))}\n"
-            f"SKU 数: {len(sku_list)}\n"
-            f"状态: {item.get('status', '')}\n"
-            f"来源链接: {item.get('source_url', '')}"
-        )
-        QMessageBox.information(self, "商品详情", info)
+        dlg = ProductEditDialog(self.items[index], self)
+        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.result_item:
+            return
+        edited = dlg.result_item
+        # 保留 db_id/item_id/status 等关键标识。
+        for key in ("db_id", "item_id", "status", "platform"):
+            if key not in edited and key in self.items[index]:
+                edited[key] = self.items[index][key]
+        try:
+            db.save_product(edited)
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"写入数据库失败：\n{e}")
+            return
+        if self.main_window is not None and hasattr(self.main_window, "reload_from_db"):
+            self.main_window.reload_from_db()
+        else:
+            self.items[index] = edited
+            self.refresh_items(self.items)
+        title = edited.get("title") or edited.get("item_id") or ""
+        self._append_log(f"✏️ 已编辑并保存：{title[:30]}")
+

@@ -225,7 +225,9 @@ class DatabaseManager:
                 conn.execute("""
                     UPDATE products SET
                         platform=:platform,
+                        original_title=:original_title,
                         ai_title=:ai_title,
+                        description=:description,
                         source_url=:source_url,
                         source_item_id=:source_item_id,
                         new_price=:new_price,

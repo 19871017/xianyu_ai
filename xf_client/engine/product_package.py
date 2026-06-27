@@ -252,9 +252,14 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
         , 120)
         spec2 = _clean_text(sku.get("spec2") or sku.get("规格2") or sku.get("sub_spec") or "", 120)
         price = _as_float(sku.get("price") or sku.get("价格") or sku.get("group_price") or base_price)
-        stock = sku.get("stock") or sku.get("库存") or sku.get("quantity") or sku.get("inventory") or base_stock
+        # 库存可能为合法的 0（售罄/缺货），不能用 or 兜底，否则会被错误重置。
+        stock = base_stock
+        for _sk in ("stock", "库存", "quantity", "inventory"):
+            if _sk in sku and str(sku.get(_sk)).strip() != "":
+                stock = sku.get(_sk)
+                break
         try:
-            stock = int(float(str(stock).replace(",", "")))
+            stock = max(0, int(float(str(stock).replace(",", ""))))
         except Exception:
             stock = DEFAULT_STOCK
 
@@ -414,6 +419,7 @@ def ensure_full_product_package(item: dict[str, Any]) -> dict[str, Any]:
         "category": item.get("category", ""),
         "category_keyword": item.get("category_keyword", ""),
         "brand": item.get("brand", ""),
+        "short_title": item.get("short_title", ""),
         "sku_list": item.get("sku_list", []),
         "main_images": item.get("main_images", []),
         "detail_images": item.get("detail_images", []),
@@ -439,6 +445,62 @@ def ensure_full_product_package(item: dict[str, Any]) -> dict[str, Any]:
     attrs[PACKAGE_ATTR_KEY] = package
     item["attributes"] = attrs
     return item
+
+
+def apply_product_edits(item: dict[str, Any], edits: dict[str, Any]) -> dict[str, Any]:
+    """把用户在编辑界面改动的字段合并回商品，再统一补齐为完整商品包。
+
+    支持编辑的字段：
+      - title / short_title / description / category_keyword / brand
+      - tags（list 或逗号分隔字符串）
+      - new_price（统一售价，会覆盖 price）
+      - sku_edits：[{index, price, stock}] 按下标改各 SKU 的价格/库存。
+
+    只改传入的键，未传入的保持原值。返回 ensure_full_product_package 后的 item。
+    """
+    if not isinstance(item, dict):
+        return item
+    item = dict(item)
+    edits = edits or {}
+
+    for key in ("title", "short_title", "description", "category_keyword", "brand"):
+        if key in edits and edits[key] is not None:
+            item[key] = _clean_text(edits[key], 2000 if key == "description" else 200)
+
+    if "tags" in edits:
+        tags = edits["tags"]
+        if isinstance(tags, str):
+            tags = [t.strip() for t in re.split(r"[,，\s]+", tags) if t.strip()]
+        if isinstance(tags, list):
+            item["tags"] = [_clean_text(t, 30) for t in tags if str(t).strip()][:10]
+
+    if "new_price" in edits and str(edits["new_price"]).strip() != "":
+        price = _as_float(edits["new_price"])
+        if price > 0:
+            item["new_price"] = price
+            item["price"] = price
+
+    sku_edits = edits.get("sku_edits")
+    if isinstance(sku_edits, list) and sku_edits:
+        sku_list = normalize_sku_list(item)
+        for se in sku_edits:
+            if not isinstance(se, dict):
+                continue
+            idx = se.get("index")
+            if not isinstance(idx, int) or not (0 <= idx < len(sku_list)):
+                continue
+            if "price" in se and str(se["price"]).strip() != "":
+                p = _as_float(se["price"])
+                if p > 0:
+                    sku_list[idx]["price"] = p
+            if "stock" in se and str(se["stock"]).strip() != "":
+                try:
+                    sku_list[idx]["stock"] = max(0, int(float(str(se["stock"]).replace(",", ""))))
+                except Exception:
+                    pass
+        item["sku_list"] = sku_list
+
+    return ensure_full_product_package(item)
 
 
 def download_product_image_groups(item: dict[str, Any], download_fn, item_dir: str) -> dict[str, Any]:

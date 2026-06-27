@@ -37,9 +37,19 @@ class RewriteWorker(QThread):
                     item.get("original_price", ""),
                 )
                 if result.get("success"):
+                    # 保留原始描述以便追溯（仅首次改写时记录）。
+                    if not item.get("original_description"):
+                        item["original_description"] = item.get("description", "")
                     item["ai_title"] = result.get("title", item.get("original_title", ""))
                     item["ai_description"] = result.get("description", "")
                     item["ai_tags"] = result.get("tags", [])
+                    # ★关键：把改写结果写进下游真正使用的字段，
+                    #   否则 AI 标题/描述/标签不会入库也不会上架。
+                    item["title"] = item["ai_title"]
+                    if item["ai_description"]:
+                        item["description"] = item["ai_description"]
+                    if item["ai_tags"]:
+                        item["tags"] = item["ai_tags"]
                 else:
                     item["ai_title"] = item.get("original_title", "")
                     item["ai_description"] = f"[改写失败] {result.get('error', '')}"
@@ -140,11 +150,21 @@ class CopywritingTab(QWidget):
         self.info_label.setText(f"正在改写: {current}/{total}")
 
     def _on_finished(self, items):
+        # 持久化改写结果，避免重启丢失（set_items 本身不落库）。
+        from database.db_manager import db
+        saved = 0
+        for it in items:
+            try:
+                if it.get("db_id"):
+                    db.save_product(it)
+                    saved += 1
+            except Exception as e:
+                print(f"保存改写结果失败: {e}")
         self.main_window.set_items(items)
         self.progress_bar.setVisible(False)
         self.info_label.setText(f"改写完成，共 {len(items)} 个商品")
         self.rewrite_btn.setEnabled(True)
-        QMessageBox.information(self, "完成", f"改写完成，共 {len(items)} 个商品")
+        QMessageBox.information(self, "完成", f"改写完成，共 {len(items)} 个商品（已保存 {saved} 个）")
 
     def _on_error(self, msg):
         self.progress_bar.setVisible(False)
