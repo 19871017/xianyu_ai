@@ -12,6 +12,7 @@ from ui.collect_tab import CollectTab
 from ui.copywriting_tab import CopywritingTab
 from ui.listing_tab import ListingTab
 from ui.export_tab import ExportTab
+from ui.order_tab import OrderTab
 from ui.settings_tab import SettingsTab
 from license.license_validator import LicenseValidator
 from database.db_manager import db
@@ -73,12 +74,14 @@ class MainWindow(QMainWindow):
         self.copywriting_tab = CopywritingTab(self)
         self.listing_tab = ListingTab(self)
         self.export_tab = ExportTab(self)
+        self.order_tab = OrderTab(self)
         self.settings_tab = SettingsTab(self)
 
         self.tabs.addTab(self.collect_tab,      "🔍 采集")
         self.tabs.addTab(self.copywriting_tab,  "✍️ 文案优化")
         self.tabs.addTab(self.listing_tab,      "📦 上架闲管家")
         self.tabs.addTab(self.export_tab,       "📊 导出")
+        self.tabs.addTab(self.order_tab,        "🛒 订单代采")
         self.tabs.addTab(self.settings_tab,     "⚙️ 设置")
 
         layout.addWidget(self.tabs)
@@ -107,6 +110,7 @@ class MainWindow(QMainWindow):
         self.copywriting_tab.refresh_items(self.collected_items)
         self.listing_tab.refresh_items(self.collected_items)
         self.export_tab.refresh_items(self.collected_items)
+        self.order_tab.refresh_items(self.collected_items)
 
     def is_licensed(self, force: bool = False) -> bool:
         """检查是否已激活（带短期缓存，避免每次点击都打网络）。"""
