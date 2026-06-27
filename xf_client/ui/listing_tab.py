@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QGroupBox, QMessageBox, QComboBox, QDoubleSpinBox,
     QProgressBar, QLineEdit, QTabWidget, QTextEdit,
-    QSpinBox, QCheckBox,
+    QSpinBox, QCheckBox, QFileDialog,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QBrush
@@ -30,7 +30,7 @@ from PyQt6.QtGui import QFont, QColor, QBrush
 from engine.goofishpro_lister import GoofishProLister
 from engine.xianyu_lister import XianyuLister
 from engine.price_manager import PriceManager
-from engine.product_package import ensure_full_product_package
+from engine.product_package import ensure_full_product_package, import_product_package
 from database.db_manager import db
 
 
@@ -210,6 +210,15 @@ class ListingTab(QWidget):
         self.deselect_btn.setMinimumHeight(30)
         self.deselect_btn.clicked.connect(self._deselect_all)
         sel_layout.addWidget(self.deselect_btn)
+        self.import_pkg_btn = QPushButton("📂 导入商品包")
+        self.import_pkg_btn.setMinimumHeight(30)
+        self.import_pkg_btn.setStyleSheet(
+            "QPushButton { background: #00897b; color: white; "
+            "border-radius: 3px; padding: 2px 12px; }"
+            "QPushButton:hover { background: #00796b; }"
+        )
+        self.import_pkg_btn.clicked.connect(self._import_package)
+        sel_layout.addWidget(self.import_pkg_btn)
         self.selected_count_label = QLabel("已选: 0")
         self.selected_count_label.setStyleSheet("color: #555; font-size: 12px; margin-left: 8px;")
         sel_layout.addWidget(self.selected_count_label)
@@ -413,6 +422,50 @@ class ListingTab(QWidget):
             if cb:
                 cb.setChecked(False)
         self._update_selected_count()
+
+    def _import_package(self):
+        """导入一个商品包目录（含 商品信息.xlsx + 图片），解析多规格后入库并刷新列表。"""
+        directory = QFileDialog.getExistingDirectory(
+            self, "选择商品包目录（含 商品信息.xlsx）", ""
+        )
+        if not directory:
+            return
+        try:
+            item = import_product_package(directory)
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"无法解析该目录：\n{e}")
+            return
+
+        sku_list = item.get("sku_list") or []
+        title = item.get("title") or item.get("item_id") or "(无标题)"
+        if not title.strip() or not sku_list:
+            QMessageBox.warning(
+                self, "导入异常",
+                "解析结果缺少标题或规格，请确认目录内有正确的 商品信息.xlsx。"
+            )
+            return
+
+        try:
+            item.setdefault("status", "collected")
+            db.save_product(item)
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"写入数据库失败：\n{e}")
+            return
+
+        if self.main_window is not None and hasattr(self.main_window, "reload_from_db"):
+            self.main_window.reload_from_db()
+
+        prices = [s.get("price") for s in sku_list if s.get("price")]
+        price_hint = f"¥{min(prices)}~¥{max(prices)}" if prices else "—"
+        QMessageBox.information(
+            self, "导入成功",
+            f"已导入：{title[:40]}\n"
+            f"规格数：{len(sku_list)}　价格区间：{price_hint}\n"
+            f"主图：{len(item.get('main_images') or [])} 张　"
+            f"详情图：{len(item.get('detail_images') or [])} 张\n\n"
+            f"已加入商品列表，可勾选后上架。"
+        )
+        self._append_log(f"📂 导入商品包: {title[:30]} | {len(sku_list)} 规格")
 
     def _update_selected_count(self):
         count = sum(

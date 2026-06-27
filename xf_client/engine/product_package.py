@@ -20,11 +20,12 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from openpyxl import Workbook
+    from openpyxl import Workbook, load_workbook
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
     from openpyxl.utils import get_column_letter
 except Exception:  # pragma: no cover - 运行时缺少依赖时给清晰错误
     Workbook = None
+    load_workbook = None
 
 from config import EXPORT_DIR
 from utils.helpers import sanitize_filename
@@ -132,6 +133,10 @@ COMMON_CATEGORY_WORDS = [
     "面膜", "口红", "粉底", "眼影", "香水", "洗发水", "沐浴露", "护手霜",
     "项链", "手链", "耳环", "戒指", "发箍", "发夹", "饰品",
     "套装", "裙子", "裤子", "鞋子", "包包",
+    "冰箱贴", "门贴", "墙贴", "贴纸", "挂件", "挂饰", "摆件", "摆设", "装饰画",
+    "对联", "春联", "福字", "灯笼", "花瓶", "相框", "钟表", "台灯", "夜灯",
+    "收纳盒", "收纳箱", "纸巾盒", "垃圾桶", "衣架", "挂钩", "地垫", "脚垫",
+    "鼠标垫", "杯垫", "钥匙扣", "胸针", "手机支架", "支架", "贴画", "壁画",
 ]
 _CATEGORY_WORDS_SORTED = sorted(set(COMMON_CATEGORY_WORDS), key=len, reverse=True)
 
@@ -559,3 +564,252 @@ def export_products_package(items: list[dict[str, Any]], output_dir: str | None 
         subdir = os.path.join(output_dir, f"{idx:03d}_{title}")
         export_product_package(item, output_dir=subdir)
     return output_dir
+
+
+# ─────────────────────────────────────────────────────────────
+#  导入：商品包目录 → 标准 item（export_product_package 的逆操作）
+# ─────────────────────────────────────────────────────────────
+
+# 表头别名 → 标准字段。兼容带 * 前缀、繁简、空格差异。
+_HEADER_ALIASES = {
+    "标题": "title",
+    "货号": "article_no",
+    "商品属性": "_attr_text",
+    "类目": "category",
+    "品牌": "brand",
+    "规格1": "spec1",
+    "规格2": "spec2",
+    "价格": "price",
+    "库存": "stock",
+    "短标题": "short_title",
+    "商家sku": "merchant_sku",
+    "sku商品条形码": "barcode",
+    "sku属性": "_sku_attr_text",
+    "无理由退货": "after_sale",
+    "支付方式限制": "payment_limit",
+    "产地": "origin",
+    "发货地": "ship_from",
+    "商品条形码": "product_barcode",
+    "商品毛重(公斤)": "gross_weight_kg",
+    "[包装]长(mm)": "package_length_mm",
+    "[包装]宽(mm)": "package_width_mm",
+    "[包装]高(mm)": "package_height_mm",
+}
+
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif")
+
+
+def _norm_header(name: Any) -> str:
+    text = re.sub(r"\s+", "", str(name or "")).lstrip("*＊").lower()
+    return text
+
+
+def _parse_attr_text(text: Any) -> dict[str, str]:
+    """把 ``材质:聚丙烯；风格:中式；`` 反解析为属性字典。"""
+    attrs: dict[str, str] = {}
+    if not text:
+        return attrs
+    for part in re.split(r"[；;]", str(text)):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.split(r"[:：]", part, maxsplit=1)
+        if len(m) == 2:
+            key, val = m[0].strip(), m[1].strip()
+            if key and val:
+                attrs[key] = val
+    return attrs
+
+
+def _natural_key(name: str) -> list:
+    return [int(t) if t.isdigit() else t.lower()
+            for t in re.split(r"(\d+)", name)]
+
+
+def _list_images(directory: str, prefixes: tuple[str, ...]) -> list[str]:
+    """目录下按前缀匹配的图片，自然排序返回绝对路径。"""
+    if not directory or not os.path.isdir(directory):
+        return []
+    out = []
+    for fn in os.listdir(directory):
+        low = fn.lower()
+        if not low.endswith(_IMAGE_EXTS):
+            continue
+        if prefixes and not any(fn.startswith(p) for p in prefixes):
+            continue
+        out.append(fn)
+    out.sort(key=_natural_key)
+    return [os.path.join(directory, fn) for fn in out]
+
+
+def _find_image_dir(root: str, subdir_names: tuple[str, ...]) -> str:
+    """返回存在的图片子目录路径；都不存在时回退根目录。"""
+    for name in subdir_names:
+        cand = os.path.join(root, name)
+        if os.path.isdir(cand):
+            return cand
+    return root
+
+
+def _collect_main_images(root: str) -> list[str]:
+    sub = _find_image_dir(root, ("主图", "主图片", "main", "mainimages"))
+    if sub != root:
+        imgs = _list_images(sub, ())
+        if imgs:
+            return imgs
+    return _list_images(root, ("主图", "主图_"))
+
+
+def _collect_detail_images(root: str) -> list[str]:
+    sub = _find_image_dir(root, ("详情图", "详情页", "detail", "detailimages"))
+    if sub != root:
+        imgs = _list_images(sub, ())
+        if imgs:
+            return imgs
+    return _list_images(root, ("详情页", "详情图"))
+
+
+def _collect_sku_image(root: str, spec1: str) -> str:
+    """按规格名匹配 SKU 图：``{规格名}_1.jpg``。优先 SKU图 子目录。"""
+    if not spec1:
+        return ""
+    safe = sanitize_filename(spec1)
+    candidates = (spec1, safe)
+    search_dirs = []
+    for name in ("SKU图", "sku图", "SKU", "skuimages"):
+        d = os.path.join(root, name)
+        if os.path.isdir(d):
+            search_dirs.append(d)
+    search_dirs.append(root)
+    for d in search_dirs:
+        if not os.path.isdir(d):
+            continue
+        files = [f for f in os.listdir(d) if f.lower().endswith(_IMAGE_EXTS)]
+        for cand in candidates:
+            for f in files:
+                stem = os.path.splitext(f)[0]
+                if stem == cand or stem == f"{cand}_1" or stem.startswith(f"{cand}_"):
+                    return os.path.join(d, f)
+    return ""
+
+
+def import_product_package(package_dir: str) -> dict[str, Any]:
+    """读取一个商品包目录（含 商品信息.xlsx + 图片），返回标准 item。
+
+    是 export_product_package 的逆操作。兼容两种布局：
+      1. 扁平：根目录下 主图_N / 详情页_N / {规格}_1。
+      2. 子目录：主图/、详情图/、SKU图/。
+    多行 = 多规格；商品级字段（标题/属性等）从首个非空行向后继承。
+    """
+    if load_workbook is None:
+        raise RuntimeError("缺少 openpyxl，请先安装：pip install openpyxl")
+    if not os.path.isdir(package_dir):
+        raise FileNotFoundError(f"目录不存在: {package_dir}")
+
+    xlsx_path = None
+    for fn in os.listdir(package_dir):
+        if fn.lower().endswith((".xlsx", ".xls")) and not fn.startswith("~$"):
+            xlsx_path = os.path.join(package_dir, fn)
+            if "商品信息" in fn:
+                break
+    if not xlsx_path:
+        raise FileNotFoundError(f"目录内未找到商品信息表格: {package_dir}")
+
+    wb = load_workbook(xlsx_path, data_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        raise ValueError("表格为空")
+
+    header = rows[0]
+    col_map: dict[int, str] = {}
+    for idx, name in enumerate(header):
+        field = _HEADER_ALIASES.get(_norm_header(name))
+        if field:
+            col_map[idx] = field
+
+    def cell(row, field):
+        for idx, f in col_map.items():
+            if f == field and idx < len(row):
+                return row[idx]
+        return None
+
+    product: dict[str, Any] = {}
+    sku_list: list[dict[str, Any]] = []
+    product_fields = (
+        "title", "article_no", "category", "brand", "short_title",
+        "after_sale", "payment_limit", "origin", "ship_from",
+        "product_barcode", "gross_weight_kg",
+        "package_length_mm", "package_width_mm", "package_height_mm",
+        "_attr_text",
+    )
+
+    for row in rows[1:]:
+        if not any(v not in (None, "") for v in row):
+            continue
+        # 商品级字段：首个非空即采用（后续行通常为空，沿用首行）。
+        for field in product_fields:
+            val = cell(row, field)
+            if val not in (None, "") and not product.get(field):
+                product[field] = val
+
+        spec1 = _clean_text(cell(row, "spec1") or "", 120)
+        spec2 = _clean_text(cell(row, "spec2") or "", 120)
+        price = _as_float(cell(row, "price"))
+        stock_val = cell(row, "stock")
+        try:
+            stock = int(float(str(stock_val).replace(",", ""))) if stock_val not in (None, "") else DEFAULT_STOCK
+        except Exception:
+            stock = DEFAULT_STOCK
+        # 价格和规格都空的行跳过（避免误把空白行当 SKU）。
+        if not spec1 and not price:
+            continue
+        sku_list.append({
+            "spec1": spec1 or "默认",
+            "spec2": spec2,
+            "price": price,
+            "stock": stock,
+            "sku_image_url": "",
+            "sku_image": _collect_sku_image(package_dir, spec1),
+            "merchant_sku": _clean_text(cell(row, "merchant_sku") or "", 80),
+            "barcode": _clean_text(cell(row, "barcode") or "", 80),
+            "sku_attrs": _parse_attr_text(cell(row, "_sku_attr_text")),
+            "raw": {},
+        })
+
+    attrs = _parse_attr_text(product.get("_attr_text"))
+
+    main_images = _collect_main_images(package_dir)
+    detail_images = _collect_detail_images(package_dir)
+
+    item: dict[str, Any] = {
+        "item_id": f"import_{sanitize_filename(os.path.basename(package_dir.rstrip('/')))[:40]}",
+        "platform": "import",
+        "title": _clean_text(product.get("title") or "", 200),
+        "article_no": _clean_text(product.get("article_no") or "", 80),
+        "category": _clean_text(product.get("category") or "", 120),
+        "brand": _clean_text(product.get("brand") or "", 80),
+        "short_title": _clean_text(product.get("short_title") or "", 120),
+        "after_sale": _clean_text(product.get("after_sale") or "", 200),
+        "payment_limit": _clean_text(product.get("payment_limit") or "", 120),
+        "origin": _clean_text(product.get("origin") or "", 80),
+        "ship_from": _clean_text(product.get("ship_from") or "", 80),
+        "barcode": _clean_text(product.get("product_barcode") or "", 80),
+        "gross_weight_kg": product.get("gross_weight_kg") or "",
+        "package_length_mm": product.get("package_length_mm") or "",
+        "package_width_mm": product.get("package_width_mm") or "",
+        "package_height_mm": product.get("package_height_mm") or "",
+        "attributes": attrs,
+        "sku_list": sku_list,
+        "main_images": main_images,
+        "local_images": main_images,
+        "detail_images": detail_images,
+        "image_dir": package_dir,
+        "source_dir": package_dir,
+    }
+
+    prices = [s["price"] for s in sku_list if s.get("price")]
+    item["price"] = min(prices) if prices else 0.0
+    item["original_price"] = str(item["price"])
+
+    return ensure_full_product_package(item)
