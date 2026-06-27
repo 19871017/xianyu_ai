@@ -7,6 +7,16 @@ API_LICENSE_ACTIVATE = f"{SERVER_BASE_URL}/api/license/activate"
 API_LICENSE_VERIFY   = f"{SERVER_BASE_URL}/api/license/verify"
 API_AUTH_REGISTER    = f"{SERVER_BASE_URL}/api/auth/register"
 API_AUTH_LOGIN       = f"{SERVER_BASE_URL}/api/auth/login"
+API_LICENSE_HEARTBEAT = f"{SERVER_BASE_URL}/api/license/heartbeat"
+
+# 客户端调用 activate/verify/heartbeat 必须携带的密钥（与服务端 CLIENT_API_KEY 一致）。
+# 优先环境变量，便于分发时不写死在源码里。
+CLIENT_API_KEY = os.environ.get("XF_CLIENT_API_KEY", "a5008d5e75e902a25cde6f3e72181d25ed9967471e8d2545540bf624a6f39626")
+
+# 离线宽限：远程不可达时，本地最多容忍的时长（秒）。超过即判定失效。
+LICENSE_OFFLINE_GRACE_SECONDS = int(os.environ.get("XF_OFFLINE_GRACE_SECONDS", str(72 * 3600)))
+# 心跳间隔（秒），服务端可在 verify/activate 响应中下发覆盖。
+LICENSE_HEARTBEAT_INTERVAL = int(os.environ.get("XF_HEARTBEAT_INTERVAL", "60"))
 
 # ──────────────────────── AI 接口 ────────────────────────
 AI_API_URL   = os.environ.get("AI_API_URL",   "https://api.deepseek.com")
@@ -63,14 +73,15 @@ PLATFORM_URLS = {
         "products": "https://wangpu.1688.com/product/list.htm",
         "dashboard": "https://wangpu.1688.com/",
     },
-}
-
-# ──────────────────────── 各平台监控仪表盘 URL ────────────────────────
-MONITOR_DASHBOARD_URLS = {
-    "xianyu": "https://www.goofish.com/personal",
-    "pdd":    "https://mms.pinduoduo.com/dashboard/index",
-    "jd":     "https://pop.jd.com/",
-    "1688":   "https://wangpu.1688.com/",
+    # 闲管家（goofish.pro）— 第三方鱼小铺/闲鱼管理后台，用于发布上品
+    "goofishpro": {
+        "home":      "https://goofish.pro/",
+        "login":     "https://goofish.pro/login",
+        "publish":   "https://goofish.pro/sale/product/add",
+        "products":  "https://goofish.pro/sale/product/index",
+        "orders":    "https://goofish.pro/sale/order/index",
+        "dashboard": "https://goofish.pro/sale/statistics",
+    },
 }
 
 # ──────────────────────── 平台显示名称 ────────────────────────
@@ -79,6 +90,7 @@ PLATFORM_DISPLAY = {
     "pdd":    "拼多多",
     "jd":     "京东",
     "1688":   "阿里巴巴",
+    "goofishpro": "闲管家",
 }
 
 PLATFORM_ICON = {
@@ -86,6 +98,7 @@ PLATFORM_ICON = {
     "pdd":    "🛒",
     "jd":     "🏪",
     "1688":   "🏭",
+    "goofishpro": "🐠",
 }
 
 # ──────────────────────── 采集默认参数 ────────────────────────
@@ -97,7 +110,7 @@ REQUEST_TIMEOUT = 30              # HTTP 请求超时(秒)
 BROWSER_WAIT_AFTER_NAV = 3        # 页面跳转后等待(秒)
 
 # ──────────────────────── 版本 ────────────────────────
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.0.3"
 APP_NAME = "多平台电商AI助手"
 
 # ──────────────────────── 兼容别名 ────────────────────────

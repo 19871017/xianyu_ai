@@ -25,13 +25,15 @@ from DrissionPage import Chromium
 from config import IMAGE_DIR
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.browser_config import get_chromium_options, check_browser_available
+from engine.alibaba_sku_parser import parse_sku_from_html
+from utils.image_dedup import dhash, is_near_duplicate, is_valid_product_image
 
 
 # ─── 持久化Profile目录 ───────────────────────────────────────
 ALIBABA_PROFILE_DIR = os.path.join(os.path.expanduser("~"), ".xf_1688_profile")
 
 # ─── URL 常量 ─────────────────────────────────────────────────
-LOGIN_URL = "https://login.1688.com/member/marketSigninJump.htm"
+LOGIN_URL = "https://login.1688.com/member/signin.htm"
 SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={kw}"
 HOME_URL = "https://www.1688.com/"
 
@@ -79,6 +81,7 @@ class AlibabaCollector:
         self.items = []
         self.seen_ids = set()
         self.seen_img_md5 = set()
+        self.seen_img_dhash = []
         self.on_progress = on_progress
 
     # ═══════════════════════════════════════════════════════════
@@ -144,13 +147,40 @@ class AlibabaCollector:
     #  登录管理
     # ═══════════════════════════════════════════════════════════
 
+    def _read_cookie_names(self) -> set:
+        """读取当前标签的所有 Cookie 名称（含 httpOnly，document.cookie 读不到的）。"""
+        names = set()
+        try:
+            tab = self._safe_tab()
+            cookies = tab.cookies()
+            try:
+                for c in cookies:
+                    if isinstance(c, dict):
+                        name = c.get("name") or c.get("Name") or ""
+                        if name:
+                            names.add(name)
+            except Exception:
+                pass
+            if not names:
+                try:
+                    as_dict = cookies.as_dict()
+                    if isinstance(as_dict, dict):
+                        names.update(as_dict.keys())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return names
+
     def _is_logged_in(self) -> bool:
-        """检查是否已登录1688 - Cookie + DOM双重验证
+        """检查是否已登录1688 - 用 DrissionPage cookies() 读取(含 httpOnly)
 
         判断逻辑:
-        1. 当前URL是否被重定向到登录页
-        2. Cookie中是否包含1688核心登录凭证(unb)
-        3. DOM中是否有登录后才有的元素
+        1. 当前URL是否被重定向到登录页 → 未登录
+        2. Cookie 中是否包含 1688 核心登录凭证 unb(5+位数字)
+           - cookie17/_nk_/sg 作为辅助佐证, 任一存在即增强可信度
+           - 关键修复: 旧实现用 document.cookie 读 cookie17, 但它是 httpOnly,
+             JS 永远读不到 → 即使登录成功也判 false → 一直等待
         """
         try:
             tab = self._safe_tab()
@@ -160,33 +190,20 @@ class AlibabaCollector:
             if "login.taobao.com" in current_url or "login.1688.com" in current_url:
                 return False
 
-            # 第一步：Cookie严格检查 - unb是核心用户ID
-            cookie_ok = tab.run_js("""
-            var c = document.cookie || '';
-            var hasUnb = /\\bunb=\\d{5,}/.test(c);
-            var hasCookie17 = /\\bcookie17=[^;]{5,}/.test(c);
-            if (!hasUnb) return false;
-            return hasCookie17;
-            """)
-            if not cookie_ok:
+            names = self._read_cookie_names()
+            if not names:
                 return False
 
-            # 第二步：DOM验证
-            dom_ok = tab.run_js("""
-            try {
-                var text = document.body.innerText || '';
-                if (text.includes('退出登录') || text.includes('我的阿里') ||
-                    text.includes('旺铺') || text.includes('卖家中心')) {
-                    return true;
-                }
-                var userEl = document.querySelector('[class*="user-name"], [class*="member-name"], [class*="avatar"]');
-                if (userEl && userEl.offsetParent !== null) return true;
-                var loginBtn = document.querySelector('[class*="login"], [class*="to-login"]');
-                if (loginBtn && loginBtn.offsetParent !== null) return false;
-                return true;
-            } catch(e) { return false; }
-            """)
-            return bool(dom_ok)
+            # unb 是 1688/淘系核心用户ID, 存在即视为已登录
+            if "unb" in names:
+                return True
+
+            # 辅助凭证(部分场景 unb 可能延迟写入), 命中任一也视为已登录
+            aux_keys = {"cookie17", "_nk_", "sg", "_l_g_", "lid", "cancelledSubSites"}
+            if aux_keys & names:
+                return True
+
+            return False
         except Exception:
             return False
 
@@ -271,6 +288,144 @@ class AlibabaCollector:
         finally:
             self._close_browser()
 
+    def _bring_browser_to_front(self):
+        """把采集浏览器窗口激活到前台, 确保用户能看到滑块验证页。"""
+        try:
+            tab = self._safe_tab()
+            try:
+                tab.set.activate()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # macOS: 用 AppleScript 把 Chromium/Chrome 拉到最前
+        try:
+            import subprocess, sys
+            if sys.platform == "darwin":
+                for app in ("Chromium", "Google Chrome"):
+                    try:
+                        subprocess.run(
+                            ["osascript", "-e", f'tell application "{app}" to activate'],
+                            capture_output=True, timeout=3,
+                        )
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    def _detect_captcha(self) -> bool:
+        """检测当前页是否被风控验证码拦截。
+
+        1688 连续/快速访问详情页会触发滑块验证码(_____tmd_____/baxia/nc_ 等),
+        页面标题常为"验证码拦截"。命中时返回 True, 让上层暂停并提示人工处理,
+        避免静默返回空数据被误判为采集器损坏。
+        """
+        try:
+            tab = self._safe_tab()
+            title = ""
+            try:
+                title = tab.title or ""
+            except Exception:
+                pass
+            if "验证码" in title or "安全验证" in title:
+                return True
+            url = (tab.url or "").lower()
+            if "punish" in url or "_____tmd_____" in url or "captcha" in url:
+                return True
+            hit = tab.run_js('''
+            try {
+                if (document.querySelector(\'#baxia-dialog-content, .nc-container, #nc_1_wrapper, [id*="nocaptcha"]\')) return true;
+                var t = (document.body && document.body.innerText) ? document.body.innerText : \'\';
+                if (t.indexOf(\'请拖动滑块\') >= 0 || t.indexOf(\'安全验证\') >= 0 || t.indexOf(\'验证码拦截\') >= 0) return true;
+                return false;
+            } catch(e) { return false; }
+            ''')
+            return bool(hit)
+        except Exception:
+            return False
+
+    def _try_auto_solve_slider(self) -> bool:
+        """尝试程序化拖动 nc 滑块验证码(拟人化轨迹)。
+
+        1688 详情页风控常是 nc 滑块(#nc_1_n1z / .btn_slide)。这里用 DrissionPage
+        的 actions 模拟"按住-分段移动-松开", 多数情况下能直接通过, 失败再回退人工。
+
+        Returns:
+            True 验证已通过; False 未找到滑块或拖动后仍被拦截。
+        """
+        import random
+        tab = self._safe_tab()
+        btn = None
+        for sel in ('.nc_iconfont.btn_slide', '#nc_1_n1z', '.btn_slide',
+                    '.nc-lang-cnt .btn_slide', 'span[class*="btn_slide"]'):
+            try:
+                e = tab.ele(sel, timeout=1)
+                if e:
+                    btn = e
+                    break
+            except Exception:
+                continue
+        if not btn:
+            return False
+        try:
+            ac = tab.actions
+            ac.move_to(btn)
+            ac.hold(btn)
+            moved = 0
+            track_w = 300
+            while moved < track_w:
+                step = random.randint(8, 22)
+                moved += step
+                ac.move(step, random.randint(-2, 2), duration=0.02)
+                time.sleep(random.uniform(0.005, 0.02))
+            time.sleep(0.3)
+            ac.release()
+        except Exception:
+            return False
+        # 等待结果
+        for _ in range(8):
+            time.sleep(1)
+            if not self._detect_captcha():
+                return True
+        return False
+
+    def _wait_captcha_cleared(self, timeout: int = 180) -> bool:
+        """检测到验证码时, 提示用户在浏览器手动完成滑块, 轮询等待通过。
+
+        Returns:
+            True 验证码已通过(或本就无验证码); False 超时仍被拦截。
+        """
+        if not self._detect_captcha():
+            return True
+        # 先尝试程序化自动拖动滑块(多数情况可直接通过), 最多试 3 次
+        for attempt in range(3):
+            self._log(f"⚙️  检测到滑块验证, 自动尝试拖动({attempt + 1}/3)...")
+            if self._try_auto_solve_slider():
+                self._log("✅ 自动验证通过，继续采集...")
+                time.sleep(1)
+                return True
+            time.sleep(1)
+            if not self._detect_captcha():
+                self._log("✅ 验证已通过，继续采集...")
+                return True
+        # 自动失败, 回退人工
+        self._bring_browser_to_front()
+        self._log("=" * 50)
+        self._log("⚠️  自动验证未通过，触发1688安全验证(滑块验证码)")
+        self._log("请在弹出的浏览器窗口手动完成滑块验证")
+        self._log("完成后采集将自动继续")
+        self._log("=" * 50)
+        for i in range(timeout):
+            time.sleep(1)
+            if not self._detect_captcha():
+                self._log("✅ 验证已通过，继续采集...")
+                time.sleep(1)
+                return True
+            if i % 30 == 0 and i > 0:
+                self._log(f"  ⏳ 等待人工验证... ({i}s/{timeout}s)")
+        self._log("❌ 验证等待超时，跳过该商品")
+        return False
+
     # ═══════════════════════════════════════════════════════════
     #  图片下载
     # ═══════════════════════════════════════════════════════════
@@ -294,12 +449,22 @@ class AlibabaCollector:
         clean = re.sub(r'_\d+x\d+', '', url)
         return clean
 
-    def _download_and_dedup_image(self, url: str, save_dir: str, index: int) -> dict | None:
-        """下载图片并MD5去重
+    def _download_and_dedup_image(self, url: str, save_dir: str, index: int,
+                                  md5_pool: set | None = None,
+                                  dhash_pool: list | None = None) -> dict | None:
+        """下载图片并去重（字节级 MD5 + 感知 dHash）
+
+        Args:
+            md5_pool/dhash_pool: 去重作用域。默认用主图池(self.seen_img_*)；
+                SKU 图传入独立池，避免 SKU 色块图与主图内容相同时被误删。
 
         Returns:
             {"path": local_path, "md5": md5, "url": original_url} 或 None
         """
+        if md5_pool is None:
+            md5_pool = self.seen_img_md5
+        if dhash_pool is None:
+            dhash_pool = self.seen_img_dhash
         try:
             if not url or len(url) < 10:
                 return None
@@ -320,10 +485,21 @@ class AlibabaCollector:
                     return None
 
             img_data = resp.content
-            md5 = self._md5(img_data)
-            if md5 in self.seen_img_md5:
+            # 过滤 SVG 图标/占位图/超小 UI 元素(非有效商品位图)
+            if not is_valid_product_image(img_data):
                 return None
-            self.seen_img_md5.add(md5)
+            md5 = self._md5(img_data)
+            if md5 in md5_pool:
+                return None
+
+            # 感知去重: 同款图换尺寸/重压缩后字节不同但肉眼一致, dHash 能挡掉
+            img_hash = dhash(img_data)
+            if is_near_duplicate(img_hash, dhash_pool):
+                return None
+
+            md5_pool.add(md5)
+            if img_hash is not None:
+                dhash_pool.append(img_hash)
 
             # 判断图片格式
             ext = ".jpg"
@@ -352,6 +528,10 @@ class AlibabaCollector:
         match = re.search(r'offer/(\d+)', url)
         if match:
             return match.group(1)
+        # detail.m.1688.com/page/index.html?offerId=123456789
+        match = re.search(r'offerId=(\d+)', url)
+        if match:
+            return match.group(1)
         # 备用: 提取10位以上数字
         match = re.search(r'(\d{10,})', url)
         if match:
@@ -373,7 +553,12 @@ class AlibabaCollector:
             商品详情页URL列表
         """
         tab = self._safe_tab()
-        encoded_kw = quote(keyword)
+        # 1688 老搜索端点 offer_search.htm 期望 GBK 编码的关键词;
+        # 用默认 UTF-8 quote 会让服务器按 GBK 解出乱码 -> 搜不到结果。
+        try:
+            encoded_kw = quote(keyword, encoding="gbk")
+        except Exception:
+            encoded_kw = quote(keyword)
         url = SEARCH_URL.format(kw=encoded_kw)
 
         self._log(f"正在搜索: {keyword}")
@@ -393,16 +578,17 @@ class AlibabaCollector:
         max_scroll = 30
 
         while len(links) < count and scroll_attempts < max_scroll:
-            # 提取页面中的商品链接
+            # 提取页面中的商品链接。
+            # 1688 搜索结果链接形态多变, offerId 可能在路径(offer/123.html)
+            # 也可能在查询参数(detail.m.1688.com/page/index.html?offerId=123),
+            # 这里统一抓出所有链接, 在 Python 侧用正则提取 offerId 再规范化。
             item_links = tab.run_js('''
                 try {
-                    var links = document.querySelectorAll('a[href*="offer"], a[href*="detail.1688"]');
+                    var a = document.querySelectorAll('a[href]');
                     var result = [];
-                    var seen = new Set();
-                    for(var i=0; i<links.length; i++) {
-                        var h = links[i].href;
-                        if(h && h.match(/\\d{10,}/) && !seen.has(h)) {
-                            seen.add(h);
+                    for(var i=0; i<a.length; i++) {
+                        var h = a[i].href || '';
+                        if(h.indexOf('offer') >= 0 || h.indexOf('detail') >= 0) {
                             result.push(h);
                         }
                     }
@@ -413,8 +599,13 @@ class AlibabaCollector:
             item_links = json.loads(item_links) if isinstance(item_links, str) else (item_links or [])
 
             for link in item_links:
-                # 规范化链接：去掉查询参数
-                clean_link = re.sub(r'\?.*$', '', link)
+                offer_id = self._extract_item_id(link)
+                if not offer_id:
+                    continue
+                # 跳过相似商品/导购等非详情入口
+                if "similar_search" in link:
+                    continue
+                clean_link = f"https://detail.1688.com/offer/{offer_id}.html"
                 if clean_link not in seen:
                     seen.add(clean_link)
                     links.append(clean_link)
@@ -467,16 +658,27 @@ class AlibabaCollector:
                 self._log(f"  ⚠ 详情页无法访问（可能未登录）: {url[:60]}...")
                 return None
 
+            # 风控验证码检测：触发滑块时暂停等待人工处理，避免静默返回空数据
+            if self._detect_captcha():
+                if not self._wait_captcha_cleared():
+                    return None
+                tab = self._safe_tab()
+
             item_id = self._extract_item_id(url)
 
             # ── 标题 ──
+            # 1688 详情页 document.title 形如 "{商品标题} - 阿里巴巴", 最稳定;
+            # 旧版优先用 [class*="title"] 选择器会误匹配页眉公司名/客服, 故改为优先 document.title。
             title = tab.run_js('''
                 try {
-                    var el = document.querySelector('[class*="title"], .d-title, .offer-title, .obj-title');
-                    if(el) return el.textContent.trim().substring(0, 200);
-                    var el2 = document.querySelector('h1');
-                    if(el2) return el2.textContent.trim().substring(0, 200);
-                    return document.title.replace(/-阿里巴巴.*$/, '').replace(/-1688.*$/, '').trim();
+                    var t = (document.title || '').replace(/[-_|]\s*阿里巴巴.*$/, '')
+                              .replace(/[-_|]\s*1688.*$/, '').trim();
+                    if (t && t.length >= 4) return t.substring(0, 200);
+                    var h1 = document.querySelector('h1');
+                    if (h1 && h1.textContent.trim()) return h1.textContent.trim().substring(0, 200);
+                    var el = document.querySelector('.title-text, .od-pc-offer-title, [class*="offer-title"], [class*="d-title"]');
+                    if (el) return el.textContent.trim().substring(0, 200);
+                    return (document.title || '').trim().substring(0, 200);
                 } catch(e) { return ''; }
             ''') or ""
 
@@ -635,6 +837,49 @@ class AlibabaCollector:
             except Exception:
                 pass
 
+            # ── SKU 多规格多价格 (来自页面内嵌 skuModel，最稳定) ──
+            sku_list = []
+            try:
+                sku_list = parse_sku_from_html(tab.html or "")
+            except Exception as e:
+                self._log(f"  ⚠ SKU 解析异常: {e}")
+
+            # 下载 SKU 规格图，回填本地路径
+            # 用独立去重池: SKU 色块图可能与某张主图内容相同, 不能被主图池误删,
+            # 但 SKU 之间仍需去重(同一张图对应多个规格时只存一份)。
+            if sku_list:
+                sku_dir = os.path.join(item_dir, "sku")
+                ensure_dir(sku_dir)
+                sku_img_seen = {}
+                sku_md5_pool = set()
+                sku_dhash_pool = []
+                for s_idx, sku in enumerate(sku_list):
+                    img_url = sku.get("sku_image_url") or ""
+                    if not img_url:
+                        continue
+                    if img_url in sku_img_seen:
+                        sku["sku_image"] = sku_img_seen[img_url]
+                        continue
+                    res = self._download_and_dedup_image(
+                        img_url, sku_dir, s_idx,
+                        md5_pool=sku_md5_pool, dhash_pool=sku_dhash_pool)
+                    if res:
+                        sku["sku_image"] = res["path"]
+                        sku_img_seen[img_url] = res["path"]
+                # SKU 价格回退到商品价
+                for sku in sku_list:
+                    if not sku.get("price"):
+                        sku["price"] = price_float
+
+            # ── 价格校正: DOM 抓的 [class*="price"] 易误匹配(如 ¥1.0 起订标识),
+            #    SKU 价格来自内嵌数据最可靠, 用 SKU 最低有效价覆盖商品价。
+            sku_prices = [
+                float(s.get("price")) for s in (sku_list or [])
+                if isinstance(s.get("price"), (int, float)) and float(s.get("price")) > 0
+            ]
+            if sku_prices:
+                price_float = min(sku_prices)
+
             item = {
                 "item_id": f"1688_{item_id}",
                 "platform": "1688",
@@ -643,6 +888,7 @@ class AlibabaCollector:
                 "description": description,
                 "original_price": str(price_float) if price_float else price_text,
                 "price": price_float,
+                "sku_list": sku_list,
                 "image_urls": image_urls,
                 "local_images": local_images,
                 "image_dir": item_dir,
@@ -659,7 +905,7 @@ class AlibabaCollector:
 
             self._log(
                 f"  ✓ 标题: {title[:40]}  价格: ¥{price_float}  "
-                f"销量: {sales}  图片: {len(local_images)}张"
+                f"销量: {sales}  图片: {len(local_images)}张  SKU: {len(sku_list)}个"
             )
             return item
 
@@ -688,6 +934,7 @@ class AlibabaCollector:
             self.items = []
             self.seen_ids = set()
             self.seen_img_md5 = set()
+            self.seen_img_dhash = []
 
             # 确保登录
             if not self._ensure_login():
@@ -741,6 +988,7 @@ class AlibabaCollector:
             self._init_browser()
             self.items = []
             self.seen_img_md5 = set()
+            self.seen_img_dhash = []
 
             # 确保登录
             if not self._ensure_login():

@@ -117,6 +117,66 @@ def _restore_package_from_attrs(item: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+# 常见电商品类词（闲管家分类级联搜索用，按长度降序匹配以优先命中更具体的词）。
+COMMON_CATEGORY_WORDS = [
+    "连衣裙", "半身裙", "百褶裙", "牛仔裤", "打底裤", "休闲裤", "运动裤", "防晒衣",
+    "羽绒服", "冲锋衣", "针织衫", "卫衣", "毛衣", "马甲", "西装", "风衣", "外套",
+    "衬衫", "T恤", "短袖", "长袖", "吊带", "背心", "睡衣", "内衣", "文胸", "内裤",
+    "袜子", "丝袜", "围巾", "帽子", "手套", "腰带", "领带",
+    "运动鞋", "板鞋", "帆布鞋", "高跟鞋", "凉鞋", "拖鞋", "靴子", "单鞋", "皮鞋",
+    "双肩包", "单肩包", "斜挎包", "手提包", "钱包", "背包", "书包",
+    "手机壳", "数据线", "充电器", "充电宝", "耳机", "音箱", "键盘", "鼠标", "手表",
+    "水杯", "保温杯", "茶杯", "杯子", "餐具", "碗碟", "锅具", "刀具",
+    "床单", "被套", "枕头", "抱枕", "毛巾", "浴巾", "地毯", "窗帘", "桌布",
+    "玩具", "积木", "娃娃", "模型", "文具", "笔记本", "书包",
+    "面膜", "口红", "粉底", "眼影", "香水", "洗发水", "沐浴露", "护手霜",
+    "项链", "手链", "耳环", "戒指", "发箍", "发夹", "饰品",
+    "套装", "裙子", "裤子", "鞋子", "包包",
+]
+_CATEGORY_WORDS_SORTED = sorted(set(COMMON_CATEGORY_WORDS), key=len, reverse=True)
+
+
+def extract_category_keyword(title: str, category: str = "") -> str:
+    """从标题/类目里提取适合闲管家分类级联搜索的品类词。
+
+    闲管家发布页的"商品分类"是级联搜索框，必须输入能命中的品类词
+    （如"连衣裙"），用标题前几个字（如"2026年波"）搜不到。
+    策略：
+      1) 若已有 category 字段，取其最后一段（"女装/连衣裙" -> "连衣裙"）。
+      2) 在标题里按品类词库匹配，命中最靠后的具体词（中文标题品类词多在末尾）。
+      3) 回退到标题末尾 2-4 个中文字。
+    """
+    # 1) 已有类目
+    cat = (category or "").strip()
+    if cat:
+        seg = re.split(r"[/>\\\s]+", cat)
+        seg = [s for s in seg if s]
+        if seg:
+            return seg[-1][:8]
+
+    t = (title or "").strip()
+    if not t:
+        return ""
+
+    # 2) 品类词库匹配，取在标题中位置最靠后的命中词
+    best = ""
+    best_pos = -1
+    for w in _CATEGORY_WORDS_SORTED:
+        pos = t.rfind(w)
+        if pos > best_pos:
+            best_pos = pos
+            best = w
+    if best:
+        return best
+
+    # 3) 回退：取末尾连续中文（去掉结尾的"厂家/批发/包邮"等噪声）
+    t2 = re.sub(r"(厂家|批发|包邮|现货|新款|爆款|直销|代发|一件代发)$", "", t)
+    m = re.findall(r"[\u4e00-\u9fa5]+", t2)
+    if m:
+        return m[-1][-4:]
+    return ""
+
+
 def format_attributes(attrs: dict[str, Any]) -> str:
     if not attrs:
         return ""
@@ -241,6 +301,9 @@ def ensure_full_product_package(item: dict[str, Any]) -> dict[str, Any]:
 
     item["brand"] = _clean_text(brand, 80)
     item["category"] = _clean_text(category, 120)
+    item["category_keyword"] = item.get("category_keyword") or extract_category_keyword(
+        title, item.get("category", "")
+    )
     item["article_no"] = _clean_text(article_no, 80)
     item["origin"] = _clean_text(origin, 80)
     item["ship_from"] = _clean_text(ship_from, 80)
@@ -292,6 +355,7 @@ def ensure_full_product_package(item: dict[str, Any]) -> dict[str, Any]:
         "title": item.get("title", ""),
         "article_no": item.get("article_no", ""),
         "category": item.get("category", ""),
+        "category_keyword": item.get("category_keyword", ""),
         "brand": item.get("brand", ""),
         "sku_list": item.get("sku_list", []),
         "main_images": item.get("main_images", []),

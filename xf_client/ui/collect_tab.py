@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QGroupBox,
     QRadioButton, QButtonGroup, QProgressBar, QMessageBox,
-    QTextEdit, QComboBox,
+    QTextEdit, QComboBox, QDoubleSpinBox,
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QFont
@@ -12,7 +12,9 @@ from PyQt6.QtGui import QFont
 from engine.xianyu_collector import XianyuCollector
 from engine.pdd_collector import PddCollector
 from engine.alibaba_collector import AlibabaCollector
+from engine.taobao_collector import TaobaoCollector
 from engine.jd_collector import JDCollector
+from engine.collect_filter import filter_items
 from database.db_manager import db
 from engine.product_package import ensure_full_product_package, export_products_package
 
@@ -25,6 +27,7 @@ COLLECTOR_CLASSES = {
     "pdd": PddCollector,
     "jd": JDCollector,
     "1688": AlibabaCollector,
+    "taobao": TaobaoCollector,
 }
 
 # 各平台登录页URL
@@ -32,7 +35,8 @@ LOGIN_URLS = {
     "xianyu": "https://login.taobao.com/",
     "pdd": "https://mobile.yangkeduo.com/",
     "jd": "https://passport.jd.com/new/login.aspx",
-    "1688": "https://login.1688.com/member/marketSigninJump.htm",
+    "1688": "https://login.1688.com/member/signin.htm",
+    "taobao": "https://login.taobao.com/",
 }
 
 
@@ -98,12 +102,13 @@ class CollectWorker(QThread):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, platform, mode, value, count):
+    def __init__(self, platform, mode, value, count, filters=None):
         super().__init__()
         self.platform = platform
         self.mode = mode
         self.value = value
         self.count = count
+        self.filters = filters or {}
 
     def run(self):
         def on_progress(msg):
@@ -131,6 +136,13 @@ class CollectWorker(QThread):
                 else:
                     items = collector.collect_by_link(self.value)
 
+            elif self.platform == "taobao":
+                collector = TaobaoCollector(on_progress=on_progress)
+                if self.mode == "keyword":
+                    items = collector.search_by_keyword(self.value, self.count)
+                else:
+                    items = collector.collect_by_link(self.value)
+
             elif self.platform == "jd":
                 collector = JDCollector(on_progress=on_progress)
                 if self.mode == "keyword":
@@ -141,9 +153,33 @@ class CollectWorker(QThread):
             else:
                 items = []
 
+            items = self._apply_filters(items)
             self.finished.emit(items)
         except Exception as e:
             self.error.emit(str(e))
+
+    def _apply_filters(self, items):
+        f = self.filters or {}
+        if not f:
+            return items
+        try:
+            filtered = filter_items(
+                items,
+                min_price=f.get('min_price'),
+                max_price=f.get('max_price'),
+                min_sales=f.get('min_sales'),
+                min_wants=f.get('min_wants'),
+                min_views=f.get('min_views'),
+                sort_by=f.get('sort_by'),
+                order=f.get('order', 'desc'),
+            )
+            removed = len(items) - len(filtered)
+            if removed > 0:
+                self.progress.emit(f'按筛选条件过滤掉 {removed} 个，保留 {len(filtered)} 个')
+            return filtered
+        except Exception as e:
+            self.progress.emit(f'筛选异常，返回原始结果: {e}')
+            return items
 
 
 # 平台提示配置
@@ -161,6 +197,11 @@ PLATFORM_HINTS = {
     "1688": {
         "keyword": "输入1688搜索关键词，如：手机壳批发",
         "link": "粘贴1688商品链接，如：https://detail.1688.com/offer/xxx.html",
+        "link_label": "商品链接:",
+    },
+    "taobao": {
+        "keyword": "输入淘宝/天猫搜索关键词，如：蓝牙耳机",
+        "link": "粘贴淘宝/天猫商品链接，如：https://item.taobao.com/item.htm?id=xxx",
         "link_label": "商品链接:",
     },
     "jd": {
@@ -195,6 +236,7 @@ class CollectTab(QWidget):
         self.platform_combo.addItem("🛒 拼多多", "pdd")
         self.platform_combo.addItem("🏪 京东", "jd")
         self.platform_combo.addItem("🏭 阿里巴巴(1688)", "1688")
+        self.platform_combo.addItem("🛍 淘宝/天猫", "taobao")
         self.platform_combo.currentIndexChanged.connect(self._on_platform_changed)
         platform_layout.addWidget(self.platform_combo)
 
@@ -271,6 +313,68 @@ class CollectTab(QWidget):
         count_layout.addWidget(self.count_spin)
         count_layout.addStretch()
         param_layout.addLayout(count_layout)
+
+        # ── 筛选与排序 ──
+        from PyQt6.QtWidgets import QDoubleSpinBox
+        price_layout = QHBoxLayout()
+        price_layout.addWidget(QLabel('价格区间:'))
+        self.min_price_spin = QDoubleSpinBox()
+        self.min_price_spin.setRange(0, 999999)
+        self.min_price_spin.setDecimals(2)
+        self.min_price_spin.setPrefix('¥')
+        self.min_price_spin.setMinimumHeight(32)
+        self.min_price_spin.setSpecialValueText('不限')
+        price_layout.addWidget(self.min_price_spin)
+        price_layout.addWidget(QLabel('—'))
+        self.max_price_spin = QDoubleSpinBox()
+        self.max_price_spin.setRange(0, 999999)
+        self.max_price_spin.setDecimals(2)
+        self.max_price_spin.setPrefix('¥')
+        self.max_price_spin.setMinimumHeight(32)
+        self.max_price_spin.setSpecialValueText('不限')
+        price_layout.addWidget(self.max_price_spin)
+        price_layout.addStretch()
+        param_layout.addLayout(price_layout)
+
+        hot_layout = QHBoxLayout()
+        hot_layout.addWidget(QLabel('最低销量:'))
+        self.min_sales_spin = QSpinBox()
+        self.min_sales_spin.setRange(0, 9999999)
+        self.min_sales_spin.setMinimumHeight(32)
+        self.min_sales_spin.setSpecialValueText('不限')
+        hot_layout.addWidget(self.min_sales_spin)
+        hot_layout.addWidget(QLabel('最低想要/热度:'))
+        self.min_wants_spin = QSpinBox()
+        self.min_wants_spin.setRange(0, 9999999)
+        self.min_wants_spin.setMinimumHeight(32)
+        self.min_wants_spin.setSpecialValueText('不限')
+        hot_layout.addWidget(self.min_wants_spin)
+        hot_layout.addWidget(QLabel('最低浏览量:'))
+        self.min_views_spin = QSpinBox()
+        self.min_views_spin.setRange(0, 99999999)
+        self.min_views_spin.setMinimumHeight(32)
+        self.min_views_spin.setSpecialValueText('不限')
+        hot_layout.addWidget(self.min_views_spin)
+        hot_layout.addStretch()
+        param_layout.addLayout(hot_layout)
+
+        sort_layout = QHBoxLayout()
+        sort_layout.addWidget(QLabel('排序:'))
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem('不排序', '')
+        self.sort_combo.addItem('价格', 'price')
+        self.sort_combo.addItem('销量', 'sales')
+        self.sort_combo.addItem('想要/热度', 'wants')
+        self.sort_combo.addItem('浏览量', 'views')
+        self.sort_combo.setMinimumHeight(32)
+        sort_layout.addWidget(self.sort_combo)
+        self.order_combo = QComboBox()
+        self.order_combo.addItem('从高到低', 'desc')
+        self.order_combo.addItem('从低到高', 'asc')
+        self.order_combo.setMinimumHeight(32)
+        sort_layout.addWidget(self.order_combo)
+        sort_layout.addStretch()
+        param_layout.addLayout(sort_layout)
 
         layout.addWidget(param_group)
 
@@ -409,6 +513,45 @@ class CollectTab(QWidget):
             self.input_label.setText(hints.get("link_label", "商品链接:"))
             self.input_field.setPlaceholderText(hints["link"])
 
+    def _collect_filters(self) -> dict:
+        """读取筛选控件的值，组装成 filter_items 的参数（仅含已启用项）。"""
+        f = {}
+        mn = self.min_price_spin.value()
+        mx = self.max_price_spin.value()
+        if mn > 0:
+            f["min_price"] = float(mn)
+        if mx > 0:
+            f["max_price"] = float(mx)
+        if self.min_sales_spin.value() > 0:
+            f["min_sales"] = float(self.min_sales_spin.value())
+        if self.min_wants_spin.value() > 0:
+            f["min_wants"] = float(self.min_wants_spin.value())
+        if self.min_views_spin.value() > 0:
+            f["min_views"] = float(self.min_views_spin.value())
+        sort_by = self.sort_combo.currentData()
+        if sort_by:
+            f["sort_by"] = sort_by
+            f["order"] = "asc" if self.order_combo.currentData() == "asc" else "desc"
+        return f
+
+    def _filters_desc(self, f: dict) -> str:
+        parts = []
+        if "min_price" in f or "max_price" in f:
+            lo = f.get("min_price", 0)
+            hi = f.get("max_price", "∞")
+            parts.append(f"价格 {lo}~{hi}")
+        if "min_sales" in f:
+            parts.append(f"销量≥{int(f['min_sales'])}")
+        if "min_wants" in f:
+            parts.append(f"想要≥{int(f['min_wants'])}")
+        if "min_views" in f:
+            parts.append(f"浏览≥{int(f['min_views'])}")
+        if f.get("sort_by"):
+            label = {"price": "价格", "sales": "销量", "wants": "想要", "views": "浏览"}.get(f["sort_by"], f["sort_by"])
+            arrow = "↑" if f.get("order") == "asc" else "↓"
+            parts.append(f"按{label}{arrow}排序")
+        return " | ".join(parts) if parts else "无"
+
     def _start_collect(self):
         if not self.main_window.is_licensed():
             QMessageBox.warning(self, "未激活", "请先在设置页面激活License后使用采集功能")
@@ -428,6 +571,7 @@ class CollectTab(QWidget):
                 "pdd": "https://mobile.yangkeduo.com/goods.html?goods_id=xxx",
                 "jd": "https://item.jd.com/xxxxxxxxx.html",
                 "1688": "https://detail.1688.com/offer/xxx.html",
+                "taobao": "https://item.taobao.com/item.htm?id=xxx",
             }
             example = platform_examples.get(platform, "https://...")
             QMessageBox.warning(
@@ -437,14 +581,17 @@ class CollectTab(QWidget):
             return
 
         count = self.count_spin.value()
+        filters = self._collect_filters()
 
         self.start_btn.setEnabled(False)
         self.cancel_btn.setVisible(True)
         self.progress_bar.setVisible(True)
         self.log_area.clear()
         self._append_log(f"开始采集 [{self.platform_combo.currentText()}]...")
+        if filters:
+            self._append_log(f"筛选条件: {self._filters_desc(filters)}")
 
-        self.worker = CollectWorker(platform, mode, value, count)
+        self.worker = CollectWorker(platform, mode, value, count, filters)
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
@@ -509,7 +656,7 @@ class CollectTab(QWidget):
 
     def refresh_items(self, items):
         """刷新统计信息"""
-        platform_map = {"xianyu": "闲鱼", "pdd": "拼多多", "jd": "京东", "1688": "1688"}
+        platform_map = {"xianyu": "闲鱼", "pdd": "拼多多", "jd": "京东", "1688": "1688", "taobao": "淘宝/天猫"}
         platform_counts = {}
         for item in items:
             p = item.get("platform", "xianyu")

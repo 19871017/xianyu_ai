@@ -1,258 +1,252 @@
-import time
-import os
-from DrissionPage import ChromiumPage, ChromiumOptions
-from config import PLATFORM_URLS
+"""闲鱼官方(goofish.com) 商品自动上架器。
 
-XIANYU_BASE_URL = PLATFORM_URLS['xianyu']['home'].rstrip('/')
+发布页 ``https://www.goofish.com/publish`` 是 React 自定义组件页面（非标准表单）：
+- **描述**：``contentEditable`` DIV（placeholder「描述一下宝贝的品牌型号...」，上限 1500），
+  闲鱼无独立标题字段，描述即正文（首行通常被当作标题展示）。
+- **图片**：``input[type=file]``（accept png/jpg/jpeg/heic/webp，multiple，标签「添加首图」）。
+- **价格**：占位为 ``0.00`` 的文本框，DOM 顺序前两个为 价格(一口价)/原价，第三个为运费。
+- **服务/发货**：包邮、无需邮寄等 radio。
+- **发布**：底部「发布」按钮。
+
+设计要点：
+- 登录态走 utils.login_manager（xianyu Cookie + profile），免登录。
+- 默认 ``dry_run=True``：填完表单**停在「发布」前**，由人工确认后再点发布，
+  避免误上架真实商品。
+- React 受控组件：input 用原生 value setter + input 事件；contentEditable 用
+  ``execCommand('insertText')`` 触发 React onChange。
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from typing import Any, Callable
+
+from config import PLATFORM_URLS
+from utils.login_manager import ensure_login
+
+
+PUBLISH_URL = PLATFORM_URLS["xianyu"]["publish"]
+
+IMG_EXTS = (".jpg", ".jpeg", ".png", ".heic", ".webp")
 
 
 class XianyuLister:
-    """闲鱼商品上架器
-    闲鱼发布页结构：
-    - 无独立标题输入框，标题在描述编辑器的第一行
-    - 描述用 contenteditable div (class*="editor--")
-    - 价格有3个input: 价格(第一个)、原价(第二个)、运费(第三个)
-    - 图片上传: input[type="file"], accept=image/*, multiple
-    - 发布按钮: button[class*="publish-button"]
-    - 所在地弹窗: 搜索地点 input[class*="search-input"]
-    """
+    """闲鱼官方商品上架器（默认 dry-run，停在「发布」前）。"""
 
-    def __init__(self, on_progress=None):
-        self.page = None
-        self._log = on_progress or (lambda msg: None)
+    def __init__(self, on_log: Callable[[str], None] | None = None):
+        self.log = on_log or (lambda m: None)
+        self.browser = None
+        self.tab = None
 
-    def _init_browser(self):
-        co = ChromiumOptions()
-        co.set_argument('--no-sandbox')
-        co.set_argument('--disable-blink-features=AutomationControlled')
-        co.set_argument('--disable-gpu')
-        co.set_argument('--window-size=1920,1080')
-        self.page = ChromiumPage(co)
-        self.page.run_js("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-        """)
+    # ── 浏览器/登录 ────────────────────────────────────────────
+    def open(self, timeout: int = 600) -> bool:
+        res = ensure_login("xianyu", on_log=self.log, timeout=timeout)
+        if not res["ok"]:
+            self.log(f"登录失败: {res.get('error')}")
+            return False
+        self.browser = res["browser"]
+        self.tab = res["tab"]
+        return True
 
-    def _close_browser(self):
-        if self.page:
+    def close(self):
+        if self.browser:
             try:
-                self.page.quit()
+                self.browser.quit()
             except Exception:
                 pass
-            self.page = None
+            self.browser = None
+            self.tab = None
 
-    def _set_title_and_desc(self, title: str, description: str):
-        """填写标题和描述
-        闲鱼发布页没有独立标题框，标题+描述都在一个 contenteditable 编辑器里。
-        第一行写标题，空一行后写描述。
+    # ── DOM 工具 ──────────────────────────────────────────────
+    def _goto_publish(self):
+        self.tab.get(PUBLISH_URL)
+        time.sleep(6)
+
+    def _wait_form(self, timeout: int = 20) -> bool:
+        """等待发布页渲染（出现 contentEditable 描述框或价格框）。"""
+        check = r"""
+        var ed = document.querySelectorAll('div[contenteditable="true"]').length;
+        var pr = 0;
+        document.querySelectorAll('input').forEach(function(i){
+          if((i.getAttribute('placeholder')||'')==='0.00') pr++;
+        });
+        return (ed > 0 || pr > 0);
         """
-        editor = self.page.ele('css:[class*="editor--"]')
-        if not editor:
-            # fallback: 找 contenteditable div
-            editor = self.page.ele('css:[contenteditable="true"]')
-        
-        if editor:
-            editor.click()
-            time.sleep(0.3)
-            
-            # 清空已有内容
-            self.page.run_js('''
-                var editor = document.querySelector('[class*="editor--"]') || document.querySelector('[contenteditable="true"]');
-                if(editor) {
-                    editor.focus();
-                    editor.innerHTML = '';
-                }
-            ''')
-            time.sleep(0.2)
-            
-            # 第一行标题，空行，然后描述
-            full_text = f"{title}\n\n{description}" if description else title
-            editor.input(full_text)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if self.tab.run_js(check):
+                    return True
+            except Exception:
+                pass
             time.sleep(0.5)
-
-    def _set_price(self, price: str, original_price: str = None, shipping: str = "0"):
-        """填写价格
-        3个 input.ant-input:
-        [0] = 价格  [1] = 原价  [2] = 运费
-        """
-        price_inputs = self.page.eles('css:input.ant-input')
-        
-        if price_inputs and len(price_inputs) >= 1:
-            # 价格
-            price_inputs[0].clear()
-            price_inputs[0].input(price)
-            time.sleep(0.3)
-            
-            # 原价（可选）
-            if original_price and len(price_inputs) >= 2:
-                price_inputs[1].clear()
-                price_inputs[1].input(original_price)
-                time.sleep(0.3)
-            
-            # 运费
-            if len(price_inputs) >= 3:
-                price_inputs[2].clear()
-                price_inputs[2].input(shipping)
-                time.sleep(0.3)
-
-    def _upload_images(self, image_paths: list):
-        """上传商品图片"""
-        if not image_paths:
-            return
-        
-        file_input = self.page.ele('css:input[type="file"]')
-        if file_input:
-            # 最多9张
-            valid_paths = []
-            for p in image_paths[:9]:
-                if os.path.exists(p):
-                    valid_paths.append(p)
-            
-            if valid_paths:
-                # DrissionPage 支持多文件上传
-                file_input.input(valid_paths)
-                # 等待上传完成
-                time.sleep(3)
-
-    def _set_location(self, location: str = "全国"):
-        """设置发货地
-        闲鱼发布页有"宝贝所在地"弹窗，需要搜索地点并选择。
-        如果传"全国"则跳过（使用默认）。
-        """
-        if not location or location == "全国":
-            return
-        
-        try:
-            # 找到所在地的搜索框
-            search_input = self.page.ele('css:input[class*="search-input"]')
-            if search_input:
-                search_input.clear()
-                search_input.input(location)
-                time.sleep(1.5)
-                
-                # 点击第一个搜索结果
-                result = self.page.ele('css:[class*="search-result"]')
-                if result:
-                    result.click()
-                    time.sleep(1)
-                    
-                    # 点确定
-                    confirm_btn = self.page.ele('text:确定')
-                    if confirm_btn:
-                        confirm_btn.click()
-                        time.sleep(0.5)
-        except Exception:
-            pass  # 地址设置失败不阻塞发布
-
-    def _click_publish(self) -> bool:
-        """点击发布按钮"""
-        pub_btn = self.page.ele('css:button[class*="publish-button"]')
-        if not pub_btn:
-            pub_btn = self.page.ele('text:发布')
-        
-        if pub_btn:
-            pub_btn.click()
-            time.sleep(5)
-            
-            # 检查是否发布成功：URL变化或出现成功提示
-            current_url = self.page.url
-            if 'publish' not in current_url:
-                return True
-            
-            # 检查页面是否有错误提示
-            page_text = self.page.run_js('return document.body.innerText')
-            if '发布成功' in page_text or '发布中' in page_text:
-                return True
-            if '请填写' in page_text or '不能为空' in page_text:
-                return False
-            
-            # 如果还在发布页，检查是否有弹窗
-            return True
         return False
 
-    def list_item(self, item: dict, price: str = None, price_markup_pct: float = 0,
-                  stock: str = "1", location: str = "全国", schedule_time: str = None,
-                  wait_login: bool = True) -> dict:
-        """上架单个商品
-        
-        Args:
-            item: 商品数据（需含 title/original_title, description, price/original_price, local_images）
-            price: 覆盖价格（如为None则用商品自身价格）
-            price_markup_pct: 加价百分比
-            stock: 库存（闲鱼发闲置固定为1）
-            location: 发货地
-            schedule_time: 定时发布（未实现）
-        
-        Returns:
-            {"success": bool, "item_id": str, "error": str}
+    def _fill_description(self, text: str) -> bool:
+        """填写描述（contentEditable，React）。用 execCommand 触发 onChange。"""
+        js = r"""
+        var text = arguments[0];
+        var divs = document.querySelectorAll('div[contenteditable="true"]');
+        if (!divs.length) return false;
+        var el = divs[0];
+        el.focus();
+        try {
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, text);
+          return true;
+        } catch (e) {
+          el.textContent = text;
+          el.dispatchEvent(new InputEvent('input', {bubbles: true, data: text}));
+          return true;
+        }
         """
         try:
-            self._init_browser()
-
-            # 计算最终价格
-            final_price = price
-            if not final_price:
-                base = item.get("price", 0) or item.get("original_price", 0)
-                try:
-                    base = float(base)
-                except (ValueError, TypeError):
-                    base = 0
-                
-                if base > 0 and price_markup_pct > 0:
-                    final_price = f"{base * (1 + price_markup_pct / 100):.2f}"
-                elif base > 0:
-                    final_price = f"{base:.2f}"
-                else:
-                    final_price = "0.01"
-
-            # 打开发布页
-            self.page.get(f"{XIANYU_BASE_URL}/publish")
-            time.sleep(4)
-
-            # 检查是否跳到登录页
-            if 'login' in self.page.url or 'passport' in self.page.url:
-                return {"success": False, "item_id": item.get("item_id", ""), "error": "未登录闲鱼，请先在浏览器中登录"}
-
-            # 1. 上传图片（先上传，闲鱼会自动识别属性）
-            images = item.get("local_images", [])
-            if images:
-                self._upload_images(images)
-                time.sleep(2)
-
-            # 2. 填写标题+描述
-            title = item.get("ai_title") or item.get("original_title") or item.get("title", "")
-            desc = item.get("ai_description") or item.get("description", "")
-            self._set_title_and_desc(title, desc)
-            time.sleep(0.5)
-
-            # 3. 填写价格
-            original_price = item.get("original_price", "")
-            self._set_price(final_price, original_price, "0")
-            time.sleep(0.5)
-
-            # 4. 设置发货地
-            self._set_location(location)
-            time.sleep(0.5)
-
-            # 5. 点击发布
-            success = self._click_publish()
-
-            return {
-                "success": success,
-                "item_id": item.get("item_id", ""),
-                "error": "" if success else "发布可能失败，请检查闲鱼页面",
-            }
+            return bool(self.tab.run_js(js, text))
         except Exception as e:
-            return {"success": False, "item_id": item.get("item_id", ""), "error": str(e)}
-        finally:
-            self._close_browser()
+            self.log(f"填写描述异常: {e}")
+            return False
 
-    def batch_list(self, items: list, price: str = None, price_markup_pct: float = 0,
-                   stock: str = "1", location: str = "全国", delay: int = 5) -> list:
-        """批量上架"""
-        results = []
-        for i, item in enumerate(items):
-            result = self.list_item(item, price, price_markup_pct, stock, location)
-            results.append(result)
-            if i < len(items) - 1:
-                time.sleep(delay)
-        return results
+    def _price_inputs(self) -> int:
+        """返回占位为 0.00 的价格输入框数量。"""
+        js = r"""
+        var n = 0;
+        document.querySelectorAll('input').forEach(function(i){
+          if((i.getAttribute('placeholder')||'')==='0.00') n++;
+        });
+        return n;
+        """
+        try:
+            return int(self.tab.run_js(js) or 0)
+        except Exception:
+            return 0
+
+    def _fill_price_by_index(self, idx: int, value: str) -> bool:
+        """按 DOM 顺序填写第 idx 个 0.00 价格框（0=一口价, 1=原价）。"""
+        js = r"""
+        var idx = arguments[0], value = arguments[1];
+        var prices = [];
+        document.querySelectorAll('input').forEach(function(i){
+          if((i.getAttribute('placeholder')||'')==='0.00') prices.push(i);
+        });
+        if (idx >= prices.length) return false;
+        var inp = prices[idx];
+        var setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value').set;
+        inp.focus();
+        setter.call(inp, value);
+        inp.dispatchEvent(new Event('input', {bubbles: true}));
+        inp.dispatchEvent(new Event('change', {bubbles: true}));
+        inp.blur();
+        return true;
+        """
+        try:
+            return bool(self.tab.run_js(js, idx, str(value)))
+        except Exception as e:
+            self.log(f"填写价格[{idx}]异常: {e}")
+            return False
+
+    def _upload_images(self, paths: list[str]) -> int:
+        """上传本地主图到「添加首图」file input。返回提交的图片数。"""
+        valid = [
+            p for p in (paths or [])
+            if p and os.path.isfile(p) and p.lower().endswith(IMG_EXTS)
+        ]
+        if not valid:
+            return 0
+        try:
+            fi = self.tab.ele('css:input[type=file]', timeout=4)
+        except Exception:
+            fi = None
+        if not fi:
+            return 0
+        try:
+            fi.input("\n".join(valid))
+            time.sleep(min(2 + len(valid) * 0.8, 12))
+            return len(valid)
+        except Exception as e:
+            self.log(f"图片上传异常: {e}")
+            return 0
+
+    # ── 上架主流程 ────────────────────────────────────────────
+    def fill_product(self, item: dict[str, Any], dry_run: bool = True) -> dict[str, Any]:
+        """把单个商品数据填进闲鱼发布页。
+
+        item 字段（来自采集/打包层）：
+          title, description, price, market_price, main_images/local_images
+        闲鱼无独立标题，描述 = 标题 + 换行 + 描述正文。
+        多 SKU 时取单一售价（闲鱼官方普通发布为单价）。
+        dry_run=True 时填完即停（不点「发布」）。
+        """
+        result = {"ok": False, "filled": [], "skipped": [], "dry_run": dry_run, "error": ""}
+        if not self.tab:
+            result["error"] = "浏览器未就绪，请先 open()"
+            return result
+
+        try:
+            self._goto_publish()
+            if not self._wait_form():
+                result["error"] = "闲鱼发布页未渲染（可能登录失效或页面改版）"
+                return result
+
+            title = item.get("title") or item.get("original_title") or ""
+            desc = item.get("description") or item.get("desc") or ""
+            price = item.get("price") or item.get("original_price") or ""
+
+            # 1) 图片（闲鱼建议先传图）
+            imgs = item.get("main_images") or item.get("local_images") or []
+            up = self._upload_images(imgs)
+            if up:
+                result["filled"].append(f"图片×{up}")
+                self.log(f"已上传图片 {up} 张")
+            else:
+                result["skipped"].append("商品图片")
+
+            # 2) 描述（标题 + 正文，闲鱼无独立标题）
+            full_desc = title
+            if desc and desc != title:
+                full_desc = f"{title}\n{desc}" if title else desc
+            full_desc = (full_desc or "").strip()[:1500]
+            if full_desc and self._fill_description(full_desc):
+                result["filled"].append("描述")
+            else:
+                result["skipped"].append("描述")
+
+            # 3) 价格（第 0 个 0.00 框 = 一口价）
+            if str(price).strip():
+                if self._fill_price_by_index(0, f"{float(price):.2f}"):
+                    result["filled"].append("价格")
+                else:
+                    result["skipped"].append("价格")
+            else:
+                result["skipped"].append("价格")
+
+            # 4) 原价（第 1 个 0.00 框，可选）
+            market = item.get("market_price") or ""
+            if str(market).strip() and self._price_inputs() >= 2:
+                if self._fill_price_by_index(1, f"{float(market):.2f}"):
+                    result["filled"].append("原价")
+
+            # 多 SKU 仅提示：闲鱼官方普通发布为单价
+            sku_list = item.get("sku_list") or []
+            if len(sku_list) > 1:
+                result["sku_count"] = len(sku_list)
+                self.log(
+                    f"检测到 {len(sku_list)} 个 SKU，闲鱼官方普通发布按单一售价填写。"
+                )
+
+            result["ok"] = True
+            if dry_run:
+                self.log("✅ 已填写闲鱼发布表单（dry-run，未点「发布」）。请在浏览器中核对后手动发布。")
+            return result
+        except Exception as e:
+            result["error"] = str(e)
+            return result
+
+
+if __name__ == "__main__":
+    lister = XianyuLister(on_log=lambda m: print(m, flush=True))
+    if lister.open():
+        demo = {"title": "测试商品-请勿发布", "description": "仅用于调试，请勿点击发布。",
+                "price": 9.9}
+        print(lister.fill_product(demo, dry_run=True))

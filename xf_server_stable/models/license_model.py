@@ -14,5 +14,9 @@ class License(Base):
     expires_at = Column(DateTime, nullable=False)
     is_active = Column(Boolean, default=True)
     days = Column(Integer, default=30)
+    # 允许绑定的最大设备数（覆盖全局默认，便于按授权分级控制）。
+    max_devices = Column(Integer, default=0)  # 0 表示用全局 MAX_DEVICES_PER_LICENSE
+    note = Column(String(255), default="")
     issued_at = Column(DateTime, default=datetime.utcnow)
     activated_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)

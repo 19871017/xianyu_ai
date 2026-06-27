@@ -3,6 +3,14 @@
 # 收集DrissionPage全部文件
 from PyInstaller.utils.hooks import collect_all
 import certifi
+import re as _re
+_cfg=open('config.py',encoding='utf-8').read()
+_m=_re.search(r'APP_VERSION\s*=\s*[\"\']([^\"\']+)', _cfg)
+APP_VERSION=_m.group(1) if _m else '0.0.0'
+import os as _os
+ICON_PATH=_os.path.join(_os.path.dirname(_os.path.abspath(SPEC)) if 'SPEC' in dir() else _os.getcwd(),'assets','AppIcon.icns')
+if not _os.path.exists(ICON_PATH):
+    ICON_PATH='assets/AppIcon.icns'
 
 datas_drission, binaries_drission, hiddenimports_drission = collect_all('DrissionPage')
 datas_aiohttp, binaries_aiohttp, hiddenimports_aiohttp = collect_all('aiohttp')
@@ -94,6 +102,14 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='闲鱼AI助手.app',
-    icon=None,
-    bundle_identifier=None,
+    icon=ICON_PATH,
+    bundle_identifier='com.xianyu.aihelper',
+    version=APP_VERSION,
+    info_plist={
+        'CFBundleShortVersionString': APP_VERSION,
+        'CFBundleVersion': APP_VERSION,
+        'CFBundleDisplayName': '闲鱼AI助手',
+        'NSHumanReadableCopyright': '闲鱼AI助手 v' + APP_VERSION,
+        'NSHighResolutionCapable': True,
+    },
 )

@@ -49,3 +49,14 @@ xf_chrome_profile/
 # License data
 .xf_license.json
 .xf_data/
+
+# 采集取样临时产物
+dump_*.html
+dump_*_skus.json
+dump_*_form.json
+
+# Server local secrets & test venv
+.venv_server/
+xf_server*/keys/
+xf_server*/.env
+admin_password.txt

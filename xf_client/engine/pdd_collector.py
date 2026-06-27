@@ -40,6 +40,12 @@ from utils.helpers import ensure_dir, sanitize_filename
 from utils.browser_config import get_chromium_options, check_browser_available
 from engine.product_package import download_product_image_groups
 from engine.pdd_full_package import enrich_pdd_product
+from utils.login_manager import (
+    save_cookies as _save_cookies,
+    load_cookies as _load_cookies,
+    _read_tab_cookies,
+    _inject_cookies,
+)
 
 
 # ─── 持久化Profile目录 ───────────────────────────────────────
@@ -72,11 +78,10 @@ STEALTH_JS = r"""
 (function() {
     'use strict';
 
-    /* ── 1. 隐藏 webdriver 标记 (最关键！PDD必查) ── */
+    /* ── 1. 隐藏 webdriver 标记（最关键，PDD必查）── */
     try {
         Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined,
-            configurable: true
+            get: () => undefined, configurable: true
         });
     } catch(e) {}
 
@@ -88,143 +93,55 @@ STEALTH_JS = r"""
         cdcKeys.forEach(k => { try { delete window[k]; } catch(e) {} });
     } catch(e) {}
 
-    /* ── 3. 伪造 chrome 对象 (PDD 检查 chrome.runtime) ── */
-    try {
-        if (!window.chrome || typeof window.chrome !== 'object') {
-            Object.defineProperty(window, 'chrome', { value: {}, writable: true, configurable: true });
-        }
-        const cr = window.chrome;
-        if (!cr.runtime) {
-            cr.runtime = {
-                id: undefined,
-                connect: function() {
-                    return { onMessage: { addListener: function(){}, removeListener: function(){} },
-                             postMessage: function(){}, disconnect: function(){} };
-                },
-                sendMessage: function() { return Promise.resolve(); },
-                onMessage: { addListener: function(){}, removeListener: function(){}, hasListener: function(){ return false; } },
-                onConnect: { addListener: function(){}, removeListener: function(){} },
-                getManifest: function() { return {}; },
-                getURL: function(p) { return 'chrome-extension://invalid/' + p; },
-                getPlatformInfo: function(cb) { cb && cb({ os: 'win', arch: 'x86-64', nacl_arch: 'x86-64' }); }
-            };
-        }
-        if (!cr.app) {
-            cr.app = {
-                isInstalled: false,
-                InstallState: { DISABLED:'disabled', INSTALLED:'installed', NOT_INSTALLED:'not_installed' },
-                RunningState: { CANNOT_RUN:'cannot_run', READY_TO_RUN:'ready_to_run', RUNNING:'running' },
-                getDetails: function() { return null; },
-                getIsInstalled: function() { return false; },
-                runningState: function() { return 'cannot_run'; }
-            };
-        }
-        if (!cr.csi) {
-            cr.csi = function() {
-                return { pageT: Date.now(), onloadT: Date.now(), startE: Date.now(), tran: 15 };
-            };
-        }
-        if (!cr.loadTimes) {
-            cr.loadTimes = function() {
-                return {
-                    commitLoadTime: Date.now()/1000, connectionInfo: 'h2',
-                    finishDocumentLoadTime: Date.now()/1000, finishLoadTime: Date.now()/1000,
-                    firstPaintAfterLoadTime: 0, firstPaintTime: Date.now()/1000,
-                    navigationType: 'Other', npnNegotiatedProtocol: 'h2',
-                    requestTime: Date.now()/1000, startLoadTime: Date.now()/1000,
-                    wasAlternateProtocolAvailable: false, wasFetchedViaSpdy: true,
-                    wasNpnNegotiated: true
-                };
-            };
-        }
-    } catch(e) {}
-
-    /* ── 4. 伪造 plugins (空列表=机器人，PDD必查) ── */
-    try {
-        const fakePdf = { type:'application/x-google-chrome-pdf', suffixes:'pdf',
-                          description:'Portable Document Format' };
-        const fakePlugins = [
-            Object.assign(Object.create({ item: function(i){ return this[i]; }, namedItem: function(n){ return null; } }),
-                { 0: fakePdf, name:'Chrome PDF Plugin', filename:'internal-pdf-viewer',
-                  description:'Portable Document Format', length:1 }),
-            Object.assign(Object.create({ item: function(i){ return this[i]; }, namedItem: function(n){ return null; } }),
-                { 0: { type:'application/pdf', suffixes:'pdf', description:'' },
-                  name:'Chrome PDF Viewer', filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai',
-                  description:'', length:1 }),
-            Object.assign(Object.create({ item: function(i){ return this[i]; }, namedItem: function(n){ return null; } }),
-                { 0: { type:'application/x-nacl', suffixes:'', description:'Native Client Executable' },
-                  1: { type:'application/x-pnacl', suffixes:'', description:'Portable Native Client' },
-                  name:'Native Client', filename:'internal-nacl-plugin',
-                  description:'Native Client Executable', length:2 })
-        ];
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => fakePlugins,
-            configurable: true
-        });
-        Object.defineProperty(navigator, 'mimeTypes', {
-            get: () => [fakePdf],
-            configurable: true
-        });
-    } catch(e) {}
-
-    /* ── 5. 语言设置 ── */
-    try {
-        Object.defineProperty(navigator, 'languages', {
-            get: () => ['zh-CN', 'zh'],
-            configurable: true
-        });
-        Object.defineProperty(navigator, 'language', {
-            get: () => 'zh-CN',
-            configurable: true
-        });
-    } catch(e) {}
-
-    /* ── 6. Platform / 硬件信息 ── */
+    /* ── 3. iOS Safari 指纹对齐（UA 是 iPhone，指纹也必须是 iPhone）──
+       关键修复：之前注入的是桌面指纹（Win32 / window.chrome / PDF插件），
+       与 iPhone UA 严重矛盾，是 PDD 软风控（假售罄+猜你喜欢）的主因。
+       真 iOS Safari：platform='iPhone'，maxTouchPoints=5，无 window.chrome，
+       vendor='Apple Computer, Inc.'，无桌面 PDF 插件。 */
     try {
         Object.defineProperty(navigator, 'platform',
-            { get: () => 'Win32', configurable: true });
-        Object.defineProperty(navigator, 'hardwareConcurrency',
-            { get: () => 8, configurable: true });
-        Object.defineProperty(navigator, 'deviceMemory',
-            { get: () => 8, configurable: true });
+            { get: () => 'iPhone', configurable: true });
         Object.defineProperty(navigator, 'maxTouchPoints',
-            { get: () => 0, configurable: true });
+            { get: () => 5, configurable: true });
+        Object.defineProperty(navigator, 'vendor',
+            { get: () => 'Apple Computer, Inc.', configurable: true });
+        Object.defineProperty(navigator, 'hardwareConcurrency',
+            { get: () => 4, configurable: true });
     } catch(e) {}
 
-    /* ── 7. 修复 Notification 检测 ── */
+    /* ── 4. 语言设置 ── */
     try {
-        const origQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = function(parameters) {
-            if (parameters.name === 'notifications') {
-                return Promise.resolve({ state: Notification.permission || 'default', onchange: null });
-            }
-            return origQuery.call(window.navigator.permissions, parameters);
-        };
-    } catch(e) {}
-
-    /* ── 8. 防止 iframe 检测 ── */
-    try {
-        Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
-            get: function() {
-                return window;
-            },
-            configurable: true
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['zh-CN', 'zh-Hans', 'zh'], configurable: true
+        });
+        Object.defineProperty(navigator, 'language', {
+            get: () => 'zh-CN', configurable: true
         });
     } catch(e) {}
 
-    /* ── 9. 修复 toString (防止函数被识别为native) ── */
+    /* ── 5. 移除桌面 Chrome 痕迹：iOS Safari 没有 window.chrome ── */
     try {
-        const originalFn = Function.prototype.toString;
-        ['connect','sendMessage','getManifest','getURL','loadTimes','csi'].forEach(function(name) {
-            try {
-                if (window.chrome && window.chrome[name]) {
-                    window.chrome[name].toString = function() { return 'function ' + name + '() { [native code] }'; };
+        if (window.chrome) { try { delete window.chrome; } catch(e) { window.chrome = undefined; } }
+    } catch(e) {}
+
+    /* ── 6. 修复 permissions.query（避免 Notification 检测）── */
+    try {
+        const origQuery = window.navigator.permissions && window.navigator.permissions.query;
+        if (origQuery) {
+            window.navigator.permissions.query = function(parameters) {
+                if (parameters && parameters.name === 'notifications') {
+                    return Promise.resolve({ state: 'prompt', onchange: null });
                 }
-                if (window.chrome && window.chrome.runtime && window.chrome.runtime[name]) {
-                    window.chrome.runtime[name].toString = function() { return 'function ' + name + '() { [native code] }'; };
-                }
-            } catch(e) {}
-        });
+                return origQuery.call(window.navigator.permissions, parameters);
+            };
+        }
+    } catch(e) {}
+
+    /* ── 7. 触摸事件支持探测（移动端应存在 ontouchstart）── */
+    try {
+        if (!('ontouchstart' in window)) {
+            window.ontouchstart = null;
+        }
     } catch(e) {}
 
 })();
@@ -326,37 +243,35 @@ class PddCollector:
     # ──────────────────────── 登录检测 ────────────────────────
 
     def _is_logged_in(self) -> bool:
-        """检查登录态 - Cookie + DOM双重验证"""
+        """检查登录态 - Cookie(CDP) + DOM双重验证。
+
+        PDDAccessToken 是 httpOnly cookie，``document.cookie`` 读不到，
+        必须用 DrissionPage 的 ``tab.cookies()``（走 CDP）才能读到。
+        """
         try:
             url = self._safe_tab().url or ""
             if "login" in url.lower() or "passport" in url.lower():
                 return False
 
-            # 第一步：Cookie严格检查
-            cookie_ok = self.tab.run_js("""
-            var c = document.cookie || '';
-            var hasAccessToken = /\\bPDDAccessToken=[^;]{10,}/.test(c);
-            var hasMultiSid = /\\bmulti_sid=[^;]{5,}/.test(c);
-            return hasAccessToken || hasMultiSid;
-            """)
-            if not cookie_ok:
-                return False
-
-            # 第二步：DOM验证
-            dom_ok = self.tab.run_js("""
-            try {
-                var text = document.body.innerText || '';
-                if (text.includes('退出登录') || text.includes('个人中心')) {
-                    return true;
-                }
-                var userEl = document.querySelector('[class*="user-name"], [class*="nickname"], [class*="avatar"]');
-                if (userEl && userEl.offsetParent !== null) return true;
-                var loginBtn = document.querySelector('[class*="login-btn"], [class*="to-login"]');
-                if (loginBtn && loginBtn.offsetParent !== null) return false;
-                return true;
-            } catch(e) { return false; }
-            """)
-            return bool(dom_ok)
+            # 第一步：Cookie 严格检查（CDP 读取，含 httpOnly）
+            cookie_ok = False
+            try:
+                names_vals = {}
+                for ck in (self.tab.cookies() or []):
+                    name = ck.get("name") if isinstance(ck, dict) else getattr(ck, "name", "")
+                    val = ck.get("value") if isinstance(ck, dict) else getattr(ck, "value", "")
+                    if name:
+                        names_vals[name] = val or ""
+                if len(names_vals.get("PDDAccessToken", "")) >= 10:
+                    cookie_ok = True
+                elif len(names_vals.get("multi_sid", "")) >= 5:
+                    cookie_ok = True
+            except Exception:
+                cookie_ok = False
+            # 有有效 PDDAccessToken/multi_sid 即视为已登录。
+            # 注意：不再做 DOM 文本二次校验——商品详情页 body 常为零宽占位符，
+            # 匹配不到“退出登录”会误判未登录（这是之前反复掉登录的根因之一）。
+            return bool(cookie_ok)
         except Exception:
             return False
 
@@ -372,6 +287,7 @@ class PddCollector:
             try:
                 if self._is_logged_in():
                     self._log("✅ 登录成功！开始采集...")
+                    self._persist_cookies()
                     time.sleep(2)
                     return True
             except Exception:
@@ -380,6 +296,62 @@ class PddCollector:
                 self._log(f"  ⏳ 等待登录... ({i}s/{timeout}s)")
         self._log("❌ 登录等待超时")
         return False
+
+    # ──────────────────────── Cookie 持久化 ────────────────────────
+    def _restore_cookies(self) -> int:
+        """注入已保存的 Cookie（含 httpOnly 的 PDDAccessToken）。"""
+        try:
+            cookies = _load_cookies("pdd")
+        except Exception:
+            cookies = []
+        if not cookies:
+            return 0
+        try:
+            return _inject_cookies(self.tab, cookies)
+        except Exception:
+            return 0
+
+    def _persist_cookies(self) -> bool:
+        """登录成功后导出 Cookie 到 JSON。
+
+        PDDAccessToken 是 session cookie（仅存内存），强杀浏览器会丢失，
+        必须主动导出再注入，否则无法跨进程复用登录态。
+        """
+        try:
+            cookies = _read_tab_cookies(self.tab)
+        except Exception:
+            cookies = []
+        has_token = False
+        for c in cookies or []:
+            name = c.get("name") if isinstance(c, dict) else ""
+            val = str((c.get("value") if isinstance(c, dict) else "") or "")
+            if name == "PDDAccessToken" and len(val) >= 10:
+                has_token = True
+                break
+            if name == "multi_sid" and len(val) >= 5:
+                has_token = True
+                break
+        if not has_token:
+            return False
+        try:
+            _save_cookies("pdd", cookies, extra={"profile": PDD_PROFILE_DIR})
+            return True
+        except Exception:
+            return False
+
+    def _open_and_check_login(self) -> bool:
+        """打开首页 + 注入已存 Cookie + 校验登录态；登录则刷新持久化。"""
+        self._safe_tab().get(PDD_MOBILE_HOME)
+        time.sleep(2)
+        n = self._restore_cookies()
+        if n:
+            self._log(f"  ↻ 注入已存 {n} 条 Cookie，刷新校验…")
+            self._safe_tab().get(PDD_MOBILE_HOME)
+            time.sleep(2)
+        ok = self._is_logged_in()
+        if ok:
+            self._persist_cookies()
+        return ok
 
     # ──────────────────────── 图片下载 ────────────────────────
 
@@ -882,12 +854,9 @@ class PddCollector:
             self.seen_ids = set()
             self.seen_img_md5 = set()
 
-            # 先访问主页，确认/完成登录
+            # 先访问主页，确认/完成登录（自动注入已存 Cookie）
             self._log("正在打开拼多多...")
-            self._safe_tab().get(PDD_MOBILE_HOME)
-            time.sleep(3)
-
-            if not self._is_logged_in():
+            if not self._open_and_check_login():
                 logged_in = self._wait_for_login(300)
                 if not logged_in:
                     raise Exception("登录超时，请重新运行并完成登录")
@@ -939,9 +908,7 @@ class PddCollector:
         try:
             self._init_browser()
             self._log("正在打开拼多多...")
-            self._safe_tab().get(PDD_MOBILE_HOME)
-            time.sleep(3)
-            if self._is_logged_in():
+            if self._open_and_check_login():
                 self._log("✅ 已登录（使用保存的Cookie）")
                 return True
             return self._wait_for_login(timeout)
@@ -955,9 +922,7 @@ class PddCollector:
         """检查登录态（不阻塞）"""
         try:
             self._init_browser()
-            self._safe_tab().get(PDD_MOBILE_HOME)
-            time.sleep(3)
-            return self._is_logged_in()
+            return self._open_and_check_login()
         except Exception:
             return False
         finally:
@@ -976,11 +941,9 @@ class PddCollector:
             self.items = []
             self.seen_img_md5 = set()
 
-            # 检查登录态
+            # 检查登录态（自动注入已存 Cookie）
             self._log("检查登录状态...")
-            self._safe_tab().get(PDD_MOBILE_HOME)
-            time.sleep(3)
-            if not self._is_logged_in():
+            if not self._open_and_check_login():
                 logged_in = self._wait_for_login(300)
                 if not logged_in:
                     raise Exception("登录超时，请先点击'登录账号'按钮完成登录")

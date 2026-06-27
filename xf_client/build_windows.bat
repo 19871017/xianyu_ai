@@ -32,7 +32,7 @@ REM 安装依赖
 echo.
 echo [2/6] 安装Python依赖...
 pip install --upgrade pip -q
-pip install PyQt6 DrissionPage aiohttp openpyxl requests pyinstaller -q
+pip install PyQt6 DrissionPage aiohttp openpyxl requests certifi pyinstaller -q
 
 REM 清理旧打包
 if exist "dist" rmdir /s /q dist

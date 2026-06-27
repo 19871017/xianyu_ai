@@ -118,6 +118,17 @@ echo "✅ 旧服务已停止"
 
 echo "[7/8] 启动新服务..."
 cd "$DEPLOY_DIR"
+# 加载安全配置（密钥/管理员密码等）。建议在 /opt/xf_server/.env 中提供：
+#   XF_ENV=production
+#   JWT_SECRET_KEY=...(随机长串)
+#   ADMIN_PASSWORD=...(强密码)   ADMIN_FORCE_RESET=1  # 首次轮换线上弱口令后可去掉
+#   CLIENT_API_KEY=...(随机长串) REQUIRE_CLIENT_KEY=1 # 客户端全部升级后再开启
+if [ -f "$DEPLOY_DIR/.env" ]; then
+    set -a; . "$DEPLOY_DIR/.env"; set +a
+    echo "✅ 已加载 .env 安全配置"
+else
+    echo "⚠️  未发现 $DEPLOY_DIR/.env，将使用持久化随机密钥(见 keys/)。建议创建 .env 显式配置密钥。"
+fi
 nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1 > /var/log/xf_server.log 2>&1 &
 sleep 3
 
@@ -134,7 +145,7 @@ echo ""
 echo "  API地址: http://$(hostname -I | awk '{print $1}'):8000/"
 echo "  管理后台: http://$(hostname -I | awk '{print $1}'):8000/admin"
 echo "  API文档: http://$(hostname -I | awk '{print $1}'):8000/docs"
-echo "  管理员: admin / admin123"
+echo "  管理员: admin / (见 .env 的 ADMIN_PASSWORD，或 keys/admin_password.txt)"
 echo ""
 echo "  日志: tail -f /var/log/xf_server.log"
 echo ""

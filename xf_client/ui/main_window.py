@@ -4,7 +4,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout,
     QMessageBox, QLabel, QApplication,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
+import time
 from PyQt6.QtGui import QIcon, QFont
 
 from ui.collect_tab import CollectTab
@@ -12,8 +13,6 @@ from ui.copywriting_tab import CopywritingTab
 from ui.listing_tab import ListingTab
 from ui.export_tab import ExportTab
 from ui.settings_tab import SettingsTab
-from ui.order_tab import OrderTab
-from ui.monitor_tab import MonitorTab
 from license.license_validator import LicenseValidator
 from database.db_manager import db
 
@@ -26,7 +25,7 @@ GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("多平台电商AI助手 v3.0")
+        self.setWindowTitle("闲管家采集上架助手 v3.0")
         self.setMinimumSize(1200, 800)
 
         # 设置全局字体
@@ -38,6 +37,9 @@ class MainWindow(QMainWindow):
         # 共享数据 - 从数据库加载
         self.collected_items = self._load_products_from_db()
         self.license_validator = LicenseValidator()
+        self._license_cache = None
+        self._license_cache_ts = 0.0
+        self._license_cache_ttl = 30.0  # 秒：避免每次点击都打网络
 
         # 中心部件
         central = QWidget()
@@ -53,7 +55,7 @@ class MainWindow(QMainWindow):
 
         # 未激活提示
         self.unlicensed_label = QLabel(
-            "⚠️ 未激活：采集、文案优化、上架、导出、监控功能不可用。请在设置页面输入License Key激活。"
+            "⚠️ 未激活：采集、文案优化、上架、导出功能不可用。请在设置页面输入License Key激活。"
         )
         self.unlicensed_label.setStyleSheet(
             "color: #e65100; background: #fff3e0; padding: 10px; "
@@ -71,16 +73,12 @@ class MainWindow(QMainWindow):
         self.copywriting_tab = CopywritingTab(self)
         self.listing_tab = ListingTab(self)
         self.export_tab = ExportTab(self)
-        self.order_tab = OrderTab(self)
-        self.monitor_tab = MonitorTab(self)
         self.settings_tab = SettingsTab(self)
 
         self.tabs.addTab(self.collect_tab,      "🔍 采集")
         self.tabs.addTab(self.copywriting_tab,  "✍️ 文案优化")
-        self.tabs.addTab(self.listing_tab,      "📦 上架")
+        self.tabs.addTab(self.listing_tab,      "📦 上架闲管家")
         self.tabs.addTab(self.export_tab,       "📊 导出")
-        self.tabs.addTab(self.order_tab,        "📋 订单")
-        self.tabs.addTab(self.monitor_tab,      "📡 运营监控")
         self.tabs.addTab(self.settings_tab,     "⚙️ 设置")
 
         layout.addWidget(self.tabs)
@@ -90,6 +88,11 @@ class MainWindow(QMainWindow):
 
         # 刷新各Tab数据
         self._refresh_all_tabs()
+
+        # 心跳定时器：运行期实时反映吊销/强制下线
+        self._heartbeat_timer = QTimer(self)
+        self._heartbeat_timer.timeout.connect(self._on_heartbeat)
+        self._heartbeat_timer.start(60_000)
 
     def _load_products_from_db(self) -> list:
         """从数据库加载所有商品"""
@@ -104,12 +107,18 @@ class MainWindow(QMainWindow):
         self.copywriting_tab.refresh_items(self.collected_items)
         self.listing_tab.refresh_items(self.collected_items)
         self.export_tab.refresh_items(self.collected_items)
-        self.order_tab.refresh_data()
 
-    def is_licensed(self) -> bool:
-        """检查是否已激活"""
+    def is_licensed(self, force: bool = False) -> bool:
+        """检查是否已激活（带短期缓存，避免每次点击都打网络）。"""
+        now = time.time()
+        if (not force) and self._license_cache is not None and (now - self._license_cache_ts) < self._license_cache_ttl:
+            return self._license_cache
         result = self.license_validator.verify()
-        return result.get("valid", False)
+        valid = result.get("valid", False)
+        self._license_cache = valid
+        self._license_cache_ts = now
+        self._last_license_reason = result.get("reason", "")
+        return valid
 
     def _update_status(self):
         info = self.license_validator.get_license_info()
@@ -174,7 +183,24 @@ class MainWindow(QMainWindow):
 
     def update_status(self):
         self._update_status()
-        self.unlicensed_label.setVisible(not self.is_licensed())
+        # 激活/状态变更后强制刷新缓存，立即反映到 UI 与各功能门控
+        self.unlicensed_label.setVisible(not self.is_licensed(force=True))
+
+    def _on_heartbeat(self):
+        """定时心跳：服务端指示下线时立即失效并提示。"""
+        try:
+            res = self.license_validator.heartbeat()
+        except Exception:
+            return
+        action = res.get("action", "continue")
+        if action in ("logout", "deactivate"):
+            self._license_cache = False
+            self._license_cache_ts = time.time()
+            self.update_status()
+            QMessageBox.warning(
+                self, "授权状态变更",
+                f"当前授权已失效：{res.get('reason', '已被管理员下线')}\n相关功能已停用。",
+            )
 
     def closeEvent(self, event):
         """关闭窗口时保存数据"""
@@ -183,10 +209,4 @@ class MainWindow(QMainWindow):
                 db.save_product(item)
         except Exception as e:
             print(f"关闭时保存失败: {e}")
-        # 停止监控 Tab 的定时器
-        try:
-            if hasattr(self.monitor_tab, "_auto_timer") and self.monitor_tab._auto_timer:
-                self.monitor_tab._auto_timer.stop()
-        except Exception:
-            pass
         event.accept()

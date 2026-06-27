@@ -63,3 +63,26 @@ class PriceManager:
             return float(item["price"])
         price_str = item.get("original_price", "0").replace("¥", "").replace("￥", "").replace(",", "").replace("，", "").strip()
         return float(price_str)
+
+    def batch_adjust(self, items: list, mode: str, value: float, on_progress=None) -> list:
+        """统一调价入口：按 mode 分发到具体策略。
+
+        mode:
+          - markup_pct    加价百分比
+          - markdown_pct  降价百分比
+          - set_price     统一设价
+          - fixed_reduce  固定金额降价
+        """
+        if mode == "markup_pct":
+            result = self.batch_markup_price(items, value)
+        elif mode == "markdown_pct":
+            result = self.batch_reduce_price(items, value)
+        elif mode == "set_price":
+            result = self.batch_set_price(items, value)
+        elif mode == "fixed_reduce":
+            result = self.batch_reduce_fixed(items, value)
+        else:
+            result = items
+        if on_progress:
+            on_progress(f"已对 {len(result)} 个商品完成调价（{mode}={value}）")
+        return result
