@@ -312,13 +312,70 @@ class TaobaoCollector:
         except Exception:
             return False
 
+    def _try_auto_solve_slider(self) -> bool:
+        """尝试程序化拖动 nc 滑块验证码(拟人化轨迹)。
+
+        淘宝/天猫详情页风控常是 nc 滑块(#nc_1_n1z / .btn_slide)。用 DrissionPage
+        的 actions 模拟"按住-分段移动-松开", 多数情况下能直接通过, 失败再回退人工。
+
+        Returns:
+            True 验证已通过; False 未找到滑块或拖动后仍被拦截。
+        """
+        import random
+        tab = self._safe_tab()
+        btn = None
+        for sel in ('.nc_iconfont.btn_slide', '#nc_1_n1z', '.btn_slide',
+                    '.nc-lang-cnt .btn_slide', 'span[class*="btn_slide"]'):
+            try:
+                e = tab.ele(sel, timeout=1)
+                if e:
+                    btn = e
+                    break
+            except Exception:
+                continue
+        if not btn:
+            return False
+        try:
+            ac = tab.actions
+            ac.move_to(btn)
+            ac.hold(btn)
+            moved = 0
+            track_w = 300
+            while moved < track_w:
+                step = random.randint(8, 22)
+                moved += step
+                ac.move(step, random.randint(-2, 2), duration=0.02)
+                time.sleep(random.uniform(0.005, 0.02))
+            time.sleep(0.3)
+            ac.release()
+        except Exception:
+            return False
+        # 等待结果
+        for _ in range(8):
+            time.sleep(1)
+            if not self._detect_captcha():
+                return True
+        return False
+
     def _wait_captcha_cleared(self, timeout: int = 180) -> bool:
-        """检测到验证码时, 提示用户手动完成, 轮询等待通过。"""
+        """检测到验证码时, 先自动尝试拖动滑块, 失败再提示人工, 轮询等待通过。"""
         if not self._detect_captcha():
             return True
+        # 先尝试程序化自动拖动滑块(多数情况可直接通过), 最多试 3 次
+        for attempt in range(3):
+            self._log(f"⚙️  检测到滑块验证, 自动尝试拖动({attempt + 1}/3)...")
+            if self._try_auto_solve_slider():
+                self._log("✅ 自动验证通过，继续采集...")
+                time.sleep(1)
+                return True
+            time.sleep(1)
+            if not self._detect_captcha():
+                self._log("✅ 验证已通过，继续采集...")
+                return True
+        # 自动失败, 回退人工
         self._bring_browser_to_front()
         self._log("=" * 50)
-        self._log("⚠️  触发淘宝安全验证(滑块验证码)")
+        self._log("⚠️  自动验证未通过，触发淘宝安全验证(滑块验证码)")
         self._log("请在弹出的浏览器窗口手动完成验证")
         self._log("完成后采集会自动继续...")
         self._log("=" * 50)
