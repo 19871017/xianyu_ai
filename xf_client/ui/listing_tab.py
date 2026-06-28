@@ -1,15 +1,17 @@
-"""商品上架 Tab（多渠道）
+"""商品上架 Tab（多渠道，闲鱼为主）。
 
-支持两个上架渠道，用户可自由选择：
-  - 🐠 闲管家(goofish.pro)：第三方鱼小铺后台，需开通（多规格/深库存可能收费）。
-  - 🐟 闲鱼官方(goofish.com)：闲鱼官方发布页，免费，扫码登录即可，按单价发布。
+无论从哪个平台采集，上架终点统一是闲鱼。支持两个渠道：
+  - 🐟 闲鱼官方(goofish.com)【主，默认】：官方发布页，免费，扫码登录即可，
+    支持多规格 + 按规格配图 + 成色（全新）。
+  - 🐠 闲管家(goofish.pro)【次】：第三方鱼小铺后台，需开通；普通模式按单一
+    售价发布（多规格需升级鱼小铺）。
 
-采集自各平台(1688/淘宝/京东/拼多多)的数据统一打包后，由对应渠道的上架器
+采集自各平台(1688/淘宝/京东/拼多多)的数据统一打包后，由所选渠道的上架器
 自动填写发布表单。
 
 功能:
   - 商品列表展示（含来源平台标识）
-  - 上架渠道选择（闲管家 / 闲鱼官方）
+  - 上架渠道选择（闲鱼官方 / 闲管家）
   - 价格策略（加价%、降价%、固定售价）
   - 成色/库存等上架参数（闲管家专用）
   - dry-run（默认）：填完表单停在提交前，人工核对后再放开提交
@@ -49,12 +51,13 @@ SOURCE_PLATFORM_DISPLAY = {
 
 CONDITIONS = ["全新", "99新", "95新", "9新", "8新", "7新"]
 
-# 上架渠道：闲管家(需开通/可能收费) 与 闲鱼官方(免费，扫码登录)
+# 上架渠道：以闲鱼官方为主(免费、支持多规格)，闲管家为次(需开通鱼小铺)。
+# 字典顺序即下拉顺序，闲鱼在前=默认选中。
 LISTING_CHANNELS = {
+    "xianyu": {"name": "🐟 闲鱼官方（推荐）", "lister": XianyuLister,
+               "status": "listed_xianyu", "login_hint": "闲鱼"},
     "goofishpro": {"name": "🐠 闲管家", "lister": GoofishProLister,
                    "status": "listed_goofishpro", "login_hint": "闲管家"},
-    "xianyu": {"name": "🐟 闲鱼官方", "lister": XianyuLister,
-               "status": "listed_xianyu", "login_hint": "闲鱼"},
 }
 
 
@@ -65,7 +68,7 @@ class ListingWorker(QThread):
     finished = pyqtSignal(list)              # results list
 
     def __init__(self, items, price_mode, price_value,
-                 stock=1, condition="全新", dry_run=True, channel="goofishpro"):
+                 stock=1, condition="全新", dry_run=True, channel="xianyu"):
         super().__init__()
         self.items = items
         self.channel = channel
@@ -96,7 +99,7 @@ class ListingWorker(QThread):
         def on_progress(msg):
             self.progress_msg.emit(msg)
 
-        ch = LISTING_CHANNELS.get(self.channel, LISTING_CHANNELS["goofishpro"])
+        ch = LISTING_CHANNELS.get(self.channel, LISTING_CHANNELS["xianyu"])
         ch_name = ch["name"]
         hint = ch["login_hint"]
         lister = ch["lister"](on_log=on_progress)
@@ -307,7 +310,7 @@ class ListingTab(QWidget):
 
         # 操作按钮
         btn_row = QHBoxLayout()
-        self.list_btn = QPushButton("🚀 上架到闲管家（选中商品）")
+        self.list_btn = QPushButton("🚀 发布到闲鱼官方（选中商品）")
         self.list_btn.setMinimumHeight(40)
         self.list_btn.setStyleSheet(
             "QPushButton { background: #00897b; color: white; border-radius: 4px; "
@@ -377,10 +380,10 @@ class ListingTab(QWidget):
     # ──────────────────────── 事件处理 ────────────────────────
 
     def _on_channel_changed(self):
-        key = self.channel_combo.currentData() or "goofishpro"
+        key = self.channel_combo.currentData() or "xianyu"
         if key == "goofishpro":
             self.channel_hint.setText(
-                "闲管家(goofish.pro)：需开通鱼小铺，多规格/深库存可能收费。"
+                "闲管家(goofish.pro)：次选渠道，需开通鱼小铺；普通模式按单一售价，多规格需付费升级。"
             )
             self.list_btn.setText("🚀 上架到闲管家（选中商品）")
             if hasattr(self, "condition_combo"):
@@ -389,7 +392,7 @@ class ListingTab(QWidget):
                 self.stock_spin.setEnabled(True)
         else:
             self.channel_hint.setText(
-                "闲鱼官方(goofish.com)：免费发布，扫码登录即可；按单价发布，无成色字段。"
+                "闲鱼官方(goofish.com)：免费发布，扫码登录即可；支持多规格(自动建规格轴+按规格配图)，成色统一全新。"
             )
             self.list_btn.setText("🚀 发布到闲鱼官方（选中商品）")
             if hasattr(self, "condition_combo"):
@@ -504,8 +507,8 @@ class ListingTab(QWidget):
         stock = self.stock_spin.value()
         condition = self.condition_combo.currentData()
         dry_run = self.dry_run_cb.isChecked()
-        channel = self.channel_combo.currentData() or "goofishpro"
-        ch_name = LISTING_CHANNELS.get(channel, LISTING_CHANNELS["goofishpro"])["name"]
+        channel = self.channel_combo.currentData() or "xianyu"
+        ch_name = LISTING_CHANNELS.get(channel, LISTING_CHANNELS["xianyu"])["name"]
 
         msg = (
             f"即将上架 {len(selected)} 个商品到 {ch_name}\n\n"

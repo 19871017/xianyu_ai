@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
 
         self.tabs.addTab(self.collect_tab,      "🔍 采集")
         self.tabs.addTab(self.copywriting_tab,  "✍️ 文案优化")
-        self.tabs.addTab(self.listing_tab,      "📦 上架闲管家")
+        self.tabs.addTab(self.listing_tab,      "📦 上架闲鱼")
         self.tabs.addTab(self.export_tab,       "📊 导出")
         self.tabs.addTab(self.order_tab,        "🛒 订单代采")
         self.tabs.addTab(self.settings_tab,     "⚙️ 设置")
