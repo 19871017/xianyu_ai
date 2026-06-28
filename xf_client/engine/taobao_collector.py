@@ -409,7 +409,8 @@ class TaobaoCollector:
 
     def _download_and_dedup_image(self, url: str, save_dir: str, index: int,
                                   md5_pool: set | None = None,
-                                  dhash_pool: list | None = None) -> dict | None:
+                                  dhash_pool: list | None = None,
+                                  skip_perceptual: bool = False) -> dict | None:
         """下载图片并去重（有效图校验 + 字节级 MD5 + 感知 dHash）"""
         if md5_pool is None:
             md5_pool = self.seen_img_md5
@@ -441,8 +442,10 @@ class TaobaoCollector:
             if md5 in md5_pool:
                 return None
 
+            # SKU 规格图(同款不同色)跳过感知去重: dHash 转灰度后颜色信息丢失,
+            # 颜色变体会被误判为重复, 导致闲鱼按规格配图时缺图。
             img_hash = dhash(img_data)
-            if is_near_duplicate(img_hash, dhash_pool):
+            if not skip_perceptual and is_near_duplicate(img_hash, dhash_pool):
                 return None
 
             md5_pool.add(md5)
@@ -731,7 +734,7 @@ class TaobaoCollector:
                         continue
                     res = self._download_and_dedup_image(
                         img_url, sku_dir, s_idx,
-                        md5_pool=sku_md5_pool, dhash_pool=sku_dhash_pool)
+                        md5_pool=sku_md5_pool, dhash_pool=sku_dhash_pool, skip_perceptual=True)
                     if res:
                         sku["sku_image"] = res["path"]
                         sku_img_seen[img_url] = res["path"]
