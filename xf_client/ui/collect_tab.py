@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QGroupBox,
     QRadioButton, QButtonGroup, QProgressBar, QMessageBox,
-    QTextEdit, QComboBox, QDoubleSpinBox,
+    QTextEdit, QComboBox, QDoubleSpinBox, QFileDialog,
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QFont
@@ -17,6 +17,7 @@ from engine.jd_collector import JDCollector
 from engine.collect_filter import filter_items
 from database.db_manager import db
 from engine.product_package import ensure_full_product_package, export_products_package
+from engine.link_importer import import_links
 
 
 GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
@@ -95,6 +96,91 @@ class CheckLoginWorker(QThread):
             self.finished_check.emit(result)
         except Exception:
             self.finished_check.emit(False)
+
+
+class BatchImportWorker(QThread):
+    """批量链接导入采集：按平台分组，优先用各采集器的 collect_by_links 单会话循环。"""
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(self, links, filters=None):
+        super().__init__()
+        # links: [{"url","platform","item_id"}]
+        self.links = links or []
+        self.filters = filters or {}
+
+    def run(self):
+        def on_progress(msg):
+            self.progress.emit(msg)
+
+        try:
+            # 按平台分组，保序
+            groups = {}
+            order = []
+            for ln in self.links:
+                plat = ln.get("platform")
+                url = ln.get("url")
+                if not plat or not url:
+                    continue
+                if plat not in groups:
+                    groups[plat] = []
+                    order.append(plat)
+                groups[plat].append(url)
+
+            all_items = []
+            for plat in order:
+                urls = groups[plat]
+                cls = COLLECTOR_CLASSES.get(plat)
+                if cls is None:
+                    self.progress.emit(f"跳过不支持的平台: {plat}（{len(urls)}条）")
+                    continue
+                self.progress.emit(f"\n=== 开始采集 {plat}（{len(urls)} 个商品）===")
+                collector = cls(on_progress=on_progress)
+                try:
+                    if hasattr(collector, "collect_by_links"):
+                        items = collector.collect_by_links(urls)
+                    else:
+                        # 回退：逐条采集（每条重启浏览器）
+                        items = []
+                        for u in urls:
+                            try:
+                                got = collector.collect_by_link(u)
+                                if got:
+                                    items.extend(got)
+                            except Exception as e:
+                                self.progress.emit(f"  ✗ 采集异常 [{u}]: {e}")
+                    all_items.extend(items or [])
+                except Exception as e:
+                    self.progress.emit(f"  ✗ {plat} 批量采集失败: {e}")
+
+            all_items = self._apply_filters(all_items)
+            self.finished.emit(all_items)
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def _apply_filters(self, items):
+        f = self.filters or {}
+        if not f:
+            return items
+        try:
+            filtered = filter_items(
+                items,
+                min_price=f.get('min_price'),
+                max_price=f.get('max_price'),
+                min_sales=f.get('min_sales'),
+                min_wants=f.get('min_wants'),
+                min_views=f.get('min_views'),
+                sort_by=f.get('sort_by'),
+                order=f.get('order', 'desc'),
+            )
+            removed = len(items) - len(filtered)
+            if removed > 0:
+                self.progress.emit(f'按筛选条件过滤掉 {removed} 个，保留 {len(filtered)} 个')
+            return filtered
+        except Exception as e:
+            self.progress.emit(f'筛选异常，返回原始结果: {e}')
+            return items
 
 
 class CollectWorker(QThread):
@@ -418,8 +504,23 @@ class CollectTab(QWidget):
         self.cancel_btn.clicked.connect(self._cancel)
         self.cancel_btn.setVisible(False)
 
+        # 导入链接文件批量采集（配合 1688 采购助手插件等选品导出）
+        self.import_btn = QPushButton("📂 导入链接文件")
+        self.import_btn.setMinimumHeight(42)
+        self.import_btn.setStyleSheet(
+            "QPushButton { background: #00897B; color: white; "
+            "border-radius: 4px; padding: 8px 20px; font-size: 14px; font-weight: bold; }"
+            "QPushButton:hover { background: #00695C; }"
+            "QPushButton:disabled { background: #bbb; }"
+        )
+        self.import_btn.setToolTip(
+            "从选品/导出文件(Excel/CSV/JSON/TXT)中提取 1688/淘宝/京东/拼多多商品链接并批量采集"
+        )
+        self.import_btn.clicked.connect(self._import_links_collect)
+
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.cancel_btn)
+        btn_layout.addWidget(self.import_btn)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
@@ -584,6 +685,7 @@ class CollectTab(QWidget):
         filters = self._collect_filters()
 
         self.start_btn.setEnabled(False)
+        self.import_btn.setEnabled(False)
         self.cancel_btn.setVisible(True)
         self.progress_bar.setVisible(True)
         self.log_area.clear()
@@ -592,6 +694,61 @@ class CollectTab(QWidget):
             self._append_log(f"筛选条件: {self._filters_desc(filters)}")
 
         self.worker = CollectWorker(platform, mode, value, count, filters)
+        self.worker.progress.connect(self._on_progress)
+        self.worker.finished.connect(self._on_finished)
+        self.worker.error.connect(self._on_error)
+        self.worker.start()
+
+    def _import_links_collect(self):
+        """从选品/导出文件提取商品链接并批量采集（方案一：插件选品→导入采集）。"""
+        if not self.main_window.is_licensed():
+            QMessageBox.warning(self, "未激活", "请先在设置页面激活License后使用采集功能")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择选品/导出文件",
+            "",
+            "选品文件 (*.xlsx *.xlsm *.xls *.csv *.json *.txt);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        try:
+            links = import_links(path)
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"解析文件失败:\n{e}")
+            return
+        if not links:
+            QMessageBox.warning(
+                self, "未找到链接",
+                "文件中未提取到受支持平台(1688/淘宝/京东/拼多多)的商品链接。",
+            )
+            return
+
+        # 平台分布概览
+        dist = {}
+        for ln in links:
+            dist[ln["platform"]] = dist.get(ln["platform"], 0) + 1
+        plat_label = {"1688": "1688", "taobao": "淘宝/天猫", "jd": "京东", "pdd": "拼多多"}
+        desc = " | ".join(f"{plat_label.get(k, k)}: {v}个" for k, v in dist.items())
+        ret = QMessageBox.question(
+            self, "确认导入采集",
+            f"共提取到 {len(links)} 个商品链接\n{desc}\n\n是否开始批量采集？\n"
+            "(拼多多详情页可能触发风控验证，建议以 1688/淘宝为主)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        filters = self._collect_filters()
+        self.start_btn.setEnabled(False)
+        self.import_btn.setEnabled(False)
+        self.cancel_btn.setVisible(True)
+        self.progress_bar.setVisible(True)
+        self.log_area.clear()
+        self._append_log(f"📂 已导入 {len(links)} 个链接：{desc}")
+        if filters:
+            self._append_log(f"筛选条件: {self._filters_desc(filters)}")
+
+        self.worker = BatchImportWorker(links, filters)
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
@@ -650,6 +807,7 @@ class CollectTab(QWidget):
 
     def _reset_ui(self):
         self.start_btn.setEnabled(True)
+        self.import_btn.setEnabled(True)
         self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
         self.worker = None

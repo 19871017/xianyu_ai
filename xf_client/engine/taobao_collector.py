@@ -13,6 +13,7 @@
 - 连续访问详情页可能触发滑块验证码, 检测到则暂停等待人工处理
 """
 import time
+import random
 import re
 import json
 import hashlib
@@ -862,6 +863,45 @@ class TaobaoCollector:
             return self.items
         except Exception as e:
             raise Exception(f"淘宝采集失败: {e}")
+        finally:
+            self._close_browser()
+
+    def collect_by_links(self, urls: list, on_item=None) -> list:
+        """批量链接直采：单浏览器会话内循环，避免每条重启浏览器。
+
+        每个商品独立重置图片去重池(seen_img_md5/dhash)，避免跨商品误删同款图。
+        on_item(index, total, item) 可选回调，便于 UI 实时反馈进度。
+        """
+        urls = [u for u in (urls or []) if u]
+        try:
+            self._init_browser()
+            self.items = []
+            if not self._ensure_login():
+                raise Exception("登录超时，请重新运行并完成登录")
+            total = len(urls)
+            for i, url in enumerate(urls):
+                self.seen_img_md5 = set()
+                self.seen_img_dhash = []
+                self._log(f"[{i + 1}/{total}] 采集淘宝商品: {url}")
+                try:
+                    item = self._scrape_detail_page(url)
+                except Exception as e:
+                    self._log(f"  ✗ 采集异常 [{url}]: {e}")
+                    item = None
+                if item:
+                    self.items.append(item)
+                    if on_item:
+                        try:
+                            on_item(i + 1, total, item)
+                        except Exception:
+                            pass
+                else:
+                    self._log("  ✗ 采集失败，跳过")
+                time.sleep(random.uniform(1.5, 3.0))
+            self._log(f"淘宝批量采集完成，共 {len(self.items)} 个商品")
+            return self.items
+        except Exception as e:
+            raise Exception(f"淘宝批量采集失败: {e}")
         finally:
             self._close_browser()
 

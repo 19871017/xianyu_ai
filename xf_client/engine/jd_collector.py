@@ -564,3 +564,41 @@ class JDCollector:
             raise Exception(f"京东采集失败: {e}")
         finally:
             self._close_browser()
+
+    def collect_by_links(self, urls: list, on_item=None) -> list:
+        """批量链接直采：单浏览器会话内循环，避免每条重启浏览器。
+
+        每个商品独立重置图片去重池(seen_img_md5)，避免跨商品误删同款图。
+        on_item(index, total, item) 可选回调，便于 UI 实时反馈进度。
+        """
+        urls = [u for u in (urls or []) if u]
+        try:
+            self._init_browser()
+            self.items = []
+            if not self._ensure_login():
+                raise Exception("登录超时，请先点击'登录账号'按钮完成登录")
+            total = len(urls)
+            for i, url in enumerate(urls):
+                self.seen_img_md5 = set()
+                self._log(f"[{i + 1}/{total}] 采集京东商品: {url}")
+                try:
+                    item = self._collect_detail(url)
+                except Exception as e:
+                    self._log(f"  \u2717 采集异常 [{url}]: {e}")
+                    item = None
+                if item:
+                    self.items.append(item)
+                    if on_item:
+                        try:
+                            on_item(i + 1, total, item)
+                        except Exception:
+                            pass
+                else:
+                    self._log("  \u2717 采集失败，跳过")
+                time.sleep(2.0)
+            self._log(f"京东批量采集完成，共 {len(self.items)} 个商品")
+            return self.items
+        except Exception as e:
+            raise Exception(f"京东批量采集失败: {e}")
+        finally:
+            self._close_browser()
