@@ -71,6 +71,20 @@ class TestExtractLinksFromText(unittest.TestCase):
         self.assertEqual(extract_links_from_text(""), [])
         self.assertEqual(extract_links_from_text(None), [])
 
+    def test_skip_shop_links_without_item_id(self):
+        # 1688 采购助手导出含「店铺链接」(winport)，无 offerId，应被过滤，
+        # 只保留带商品 ID 的 detail/offer 链接。
+        text = (
+            "https://detail.1688.com/offer/895910231747.html?fromkv=x\n"
+            "https://m.1688.com/winport/welmark.html\n"
+            "https://detail.1688.com/offer/802011171034.html\n"
+            "https://m.1688.com/winport/b2b-38721316754ec7c.html"
+        )
+        links = extract_links_from_text(text)
+        self.assertEqual(len(links), 2)
+        self.assertTrue(all("/offer/" in l["url"] for l in links))
+        self.assertTrue(all(l["item_id"] for l in links))
+
 
 class TestImportLinks(unittest.TestCase):
     def setUp(self):

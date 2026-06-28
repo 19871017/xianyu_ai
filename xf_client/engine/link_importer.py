@@ -71,8 +71,10 @@ def _clean_url(url: str) -> str:
 def extract_links_from_text(text: str) -> list[dict[str, str]]:
     """从任意文本中提取受支持平台的商品链接。
 
-    返回 [{"url", "platform", "item_id"}]，按 (platform, item_id) 去重并保序；
-    item_id 提不到时退化为按完整 url 去重。
+    返回 [{"url", "platform", "item_id"}]，按 (platform, item_id) 去重并保序。
+
+    受支持平台均有商品 ID 规则，提取不到 ID 的链接(如店铺/winport 主页、
+    类目页)会被跳过，避免把店铺链接误当商品采集。
     """
     if not text or not isinstance(text, str):
         return []
@@ -84,7 +86,10 @@ def extract_links_from_text(text: str) -> list[dict[str, str]]:
         if not platform:
             continue
         item_id = _extract_item_id(url, platform)
-        key = (platform, item_id or url)
+        # 无商品 ID = 非商品详情页(店铺主页/类目页等)，跳过。
+        if not item_id:
+            continue
+        key = (platform, item_id)
         if key in seen:
             continue
         seen.add(key)
