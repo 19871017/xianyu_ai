@@ -183,6 +183,119 @@ class XianyuLister:
             self.log(f"图片上传异常: {e}")
             return 0
 
+    def _set_condition(self, name: str = "全新") -> bool:
+        """选择闲鱼「成色」下拉值（ant-select）。默认全新——本工具发的都是新品。"""
+        js_open = r"""
+        var sels = document.querySelectorAll('.ant-select-selector');
+        for (var i=0;i<sels.length;i++){
+          var box = sels[i].closest('.ant-form-item');
+          if (box && /成色/.test(box.innerText||'')){
+            sels[i].dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+            sels[i].click();
+            return true;
+          }
+        }
+        return false;
+        """
+        try:
+            if not self.tab.run_js(js_open):
+                return False
+        except Exception:
+            return False
+        time.sleep(0.8)
+        js_pick = r"""
+        var name = arguments[0];
+        var opts = document.querySelectorAll('.ant-select-item-option');
+        for (var i=0;i<opts.length;i++){
+          var t = (opts[i].innerText||'').trim();
+          var r = opts[i].getBoundingClientRect();
+          if (t === name && r.width>0 && r.height>0){
+            opts[i].dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+            opts[i].click();
+            return true;
+          }
+        }
+        return false;
+        """
+        try:
+            self.tab.run_js(js_pick, name)
+        except Exception as e:
+            self.log(f"选择成色异常: {e}")
+            return False
+        time.sleep(0.5)
+        js_read = r"""
+        var sels = document.querySelectorAll('.ant-select-selector');
+        for (var i=0;i<sels.length;i++){
+          var box = sels[i].closest('.ant-form-item');
+          if (box && /成色/.test(box.innerText||'')){
+            var item = sels[i].querySelector('.ant-select-selection-item');
+            return item ? (item.innerText||item.title||'').trim() : '';
+          }
+        }
+        return '';
+        """
+        try:
+            return (self.tab.run_js(js_read) or "").strip() == name
+        except Exception:
+            return False
+
+    def _upload_spec_images(self, sku_list: list[dict[str, Any]]) -> int:
+        """按规格值上传 SKU 配图（闲鱼按规格值配图，非按 SKU 行）。
+
+        每个规格值的 file input 在其 ``propertyValueInputContainer`` 容器内；
+        用容器关联定位（比固定索引更稳），把该规格值首个有效 sku_image 传上去。
+        返回成功上传的规格图数。
+        """
+        # 规格值(spec1) -> 首张有效本地图
+        by_spec: dict[str, str] = {}
+        for s in sku_list or []:
+            sp = self._norm_spec(s.get("spec1") or "")
+            img = s.get("sku_image") or ""
+            if sp and sp not in by_spec and img and os.path.isfile(img) \
+                    and img.lower().endswith(IMG_EXTS):
+                by_spec[sp] = img
+        if not by_spec:
+            return 0
+
+        # 读规格轴1的值顺序
+        js_vals = r"""
+        var out=[]; var i=0;
+        while(true){ var pv=document.getElementById('itemProperties_0_propertyValues_'+i+'_propertyValue'); if(!pv) break; out.push(pv.value||''); i++; }
+        return JSON.stringify(out);
+        """
+        try:
+            import json as _json
+            vals = _json.loads(self.tab.run_js(js_vals) or "[]")
+        except Exception:
+            return 0
+
+        try:
+            files = self.tab.eles('css:input[type=file]')
+        except Exception:
+            files = []
+        if not files:
+            return 0
+
+        done = 0
+        for idx, v in enumerate(vals):
+            sp = self._norm_spec(v or "")
+            img = by_spec.get(sp)
+            if not img:
+                continue
+            # 规格值 val_idx=idx 对应 file input idx+1（主图占 0），实测映射已确认
+            file_idx = idx + 1
+            if file_idx >= len(files):
+                continue
+            try:
+                files[file_idx].input(img)
+                time.sleep(1.2)
+                done += 1
+            except Exception as e:
+                self.log(f"规格图上传失败[{sp}]: {e}")
+        if done:
+            self.log(f"已按规格值上传配图 {done} 张。")
+        return done
+
     # ── 多规格(SKU) 支持 ──────────────────────────────────────
     @staticmethod
     def _norm_spec(value: str) -> str:
@@ -605,6 +718,9 @@ class XianyuLister:
                         f"已填多规格：{ms['axes']} 个规格轴，"
                         f"{ms['rows_filled']}/{ms['total_rows']} 行价格/库存。"
                     )
+                    spec_imgs = self._upload_spec_images(sku_list)
+                    if spec_imgs:
+                        result["filled"].append(f"规格图×{spec_imgs}")
                 else:
                     # 多规格失败，回退单价兜底，避免整单填不进价格
                     self.log(f"多规格填写未成功（{ms['note']}），回退单一售价。")
@@ -627,6 +743,12 @@ class XianyuLister:
                 if str(market).strip() and self._price_inputs() >= 2:
                     if self._fill_price_by_index(1, f"{float(market):.2f}"):
                         result["filled"].append("原价")
+
+            # 4) 成色：本工具发布的都是新品，统一选「全新」
+            if self._set_condition("全新"):
+                result["filled"].append("成色(全新)")
+            else:
+                result["skipped"].append("成色")
 
             if dry_run:
                 result["ok"] = True
