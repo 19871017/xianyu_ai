@@ -34,14 +34,31 @@ IMG_EXTS = (".jpg", ".jpeg", ".png", ".heic", ".webp")
 # 闲鱼官方发布页「规格类型」下拉为固定选项，采集数据的规格类型名不一定命中，
 # 故按规格值关键词推断，未命中时回退到第一项「颜色」。
 SPEC_TYPE_OPTIONS = ["颜色", "尺码", "容量", "份数", "大小", "高度", "总量"]
+# 关键词反推（兜底用）：按「命中该关键词的规格值个数」打分，而非关键词累计次数，
+# 避免「黑色套装」里 套+装 双命中份数压过颜色这类误判。
 SPEC_TYPE_KEYWORDS = {
     "颜色": ("色", "颜色", "color", "配色", "色系"),
-    "尺码": ("码", "尺码", "尺寸", "size", "cm", "厘米", "寸", "号"),
-    "容量": ("容量", "ml", "升", "l", "毫升", "g", "克", "kg", "ml/"),
-    "份数": ("份", "装", "个", "件", "盒", "套", "包", "支", "瓶", "对", "双"),
-    "大小": ("大", "小", "大小", "规格"),
-    "高度": ("高", "高度", "厚"),
-    "总量": ("总量", "总", "量"),
+    "尺码": ("码", "尺码", "尺寸", "size", "cm", "厘米", "寸", "号", "s", "m", "l", "xl"),
+    "容量": ("容量", "ml", "毫升", "升", "g", "克", "kg", "斤", "公斤"),
+    "份数": ("份", "装", "个", "件", "盒", "套", "包", "支", "瓶", "对", "双", "条"),
+    "大小": ("大", "小", "大小"),
+    "高度": ("高", "高度", "厚", "长", "短"),
+    "总量": ("总量", "总数", "总"),
+}
+# 原始规格类型名（1688/淘宝 sku_attrs 的 key，最权威）→ 闲鱼固定 7 项 的映射。
+# 闲鱼规格类型为只读下拉、不可自定义，故无对应项时映射到语义最接近且最不会
+# 误导买家的项；颜色为最终兜底。
+SPEC_NAME_MAP = {
+    "颜色": "颜色", "颜色分类": "颜色", "配色": "颜色", "色彩": "颜色",
+    "机型": "颜色", "型号": "颜色", "款式": "颜色", "样式": "颜色",
+    "类型": "颜色", "花色": "颜色", "图案": "颜色", "版本": "颜色",
+    "尺码": "尺码", "尺寸": "尺码", "鞋码": "尺码", "码数": "尺码", "size": "尺码",
+    "容量": "容量", "重量": "容量", "净含量": "容量", "毫升": "容量", "克重": "容量",
+    "套餐": "份数", "套装": "份数", "份数": "份数", "数量": "份数",
+    "件数": "份数", "包装": "份数", "规格": "份数", "套餐类型": "份数",
+    "大小": "大小",
+    "高度": "高度", "厚度": "高度", "长度": "高度",
+    "总量": "总量",
 }
 SPEC_VALUE_MAXLEN = 12  # 闲鱼发布页「规格值最大长度为12个字」
 
@@ -319,14 +336,72 @@ class XianyuLister:
         return v1, v2
 
     @staticmethod
-    def _infer_spec_type(values: list[str]) -> str:
-        """按规格值关键词推断闲鱼固定规格类型，未命中回退「颜色」。"""
-        blob = " ".join(values).lower()
-        best, best_hits = SPEC_TYPE_OPTIONS[0], 0
+    def _spec_axis_names(sku_list: list[dict[str, Any]]) -> tuple[str, str]:
+        """从 sku_attrs 取两个规格轴的原始类型名（最权威，用于映射闲鱼类型）。
+
+        sku_attrs 为保序 dict（解析器按 spec1、spec2 顺序写入），故第 1 个 key
+        对应 spec1 轴、第 2 个 key 对应 spec2 轴。取首个含 sku_attrs 的 SKU 即可。
+        无 sku_attrs 时返回空串，交给关键词反推兜底。
+        """
+        for sku in sku_list or []:
+            attrs = sku.get("sku_attrs")
+            if isinstance(attrs, dict) and attrs:
+                keys = list(attrs.keys())
+                n1 = keys[0] if len(keys) >= 1 else ""
+                n2 = keys[1] if len(keys) >= 2 else ""
+                return n1, n2
+        return "", ""
+
+    @staticmethod
+    def _map_spec_name(raw_name: str) -> str:
+        """把原始规格类型名（1688/淘宝 sku_attrs 的 key）映射到闲鱼固定 7 项。
+
+        命中返回映射后的固定项；未命中返回空串（交给关键词反推兜底）。
+        """
+        name = (str(raw_name or "")).strip().lower()
+        if not name:
+            return ""
+        for k, v in SPEC_NAME_MAP.items():
+            if k.lower() == name:
+                return v
+        # 包含匹配：原始名里含某个已知词（如「颜色分类」含「颜色」）。
+        for k, v in SPEC_NAME_MAP.items():
+            if k.lower() in name:
+                return v
+        return ""
+
+    @staticmethod
+    def _infer_spec_type(values: list[str], raw_name: str = "") -> str:
+        """推断闲鱼固定规格类型。
+
+        优先级：原始类型名映射（最权威）> 关键词反推 > 回退「颜色」。
+        关键词反推按「命中该关键词的规格值个数」打分（而非关键词累计次数），
+        让「每个值都含色」的颜色轴稳胜「个别值偶含套/装」的误判。
+        """
+        mapped = XianyuLister._map_spec_name(raw_name)
+        if mapped:
+            return mapped
+
+        vals = [str(v or "").lower() for v in values if str(v or "").strip()]
+        if not vals:
+            return SPEC_TYPE_OPTIONS[0]
+        # 每个规格值归给「命中的最长关键词」所属类型：更长的关键词更具体，
+        # 让 100ml 命中 容量「ml」(2字) 而非 尺码「m」(1字)；值内平局按选项
+        # 顺序（颜色优先），使「黑色套装」这类色+装并存的值稳归颜色。
+        counts = {name: 0 for name in SPEC_TYPE_OPTIONS}
+        for v in vals:
+            best_name, best_len = "", 0
+            for name in SPEC_TYPE_OPTIONS:
+                for kw in SPEC_TYPE_KEYWORDS.get(name, ()):
+                    kw = kw.lower()
+                    if kw in v and len(kw) > best_len:
+                        best_name, best_len = name, len(kw)
+            if best_name:
+                counts[best_name] += 1
+        best, best_score = SPEC_TYPE_OPTIONS[0], 0
         for name in SPEC_TYPE_OPTIONS:
-            hits = sum(1 for kw in SPEC_TYPE_KEYWORDS.get(name, ()) if kw.lower() in blob)
-            if hits > best_hits:
-                best, best_hits = name, hits
+            if counts[name] > best_score:
+                best, best_score = name, counts[name]
         return best
 
     def _add_spec_type_block(self) -> bool:
@@ -499,12 +574,14 @@ class XianyuLister:
         if not v1:
             out["note"] = "无有效规格值，已跳过多规格。"
             return out
+        # 原始类型名（最权威）：优先用它映射闲鱼固定类型，反推仅作兜底。
+        name1, name2 = self._spec_axis_names(sku_list)
 
         # 轴 1
         if not self._add_spec_type_block():
             out["note"] = "未能打开规格类型区。"
             return out
-        t1 = self._infer_spec_type(v1)
+        t1 = self._infer_spec_type(v1, name1)
         n1 = self._fill_spec_axis(0, t1, v1)
         self.log(f"规格类型1「{t1}」填入 {n1}/{len(v1)} 个值。")
         out["axes"] = 1
@@ -512,7 +589,7 @@ class XianyuLister:
         # 轴 2（可选）
         if v2:
             if self._add_spec_type_block():
-                t2 = self._infer_spec_type(v2)
+                t2 = self._infer_spec_type(v2, name2)
                 n2 = self._fill_spec_axis(1, t2, v2)
                 self.log(f"规格类型2「{t2}」填入 {n2}/{len(v2)} 个值。")
                 out["axes"] = 2
