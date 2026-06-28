@@ -113,6 +113,17 @@ def make_icns(png):
     return icns
 
 
+def make_ico(png):
+    """生成 Windows 多尺寸 .ico（任务栏/资源管理器图标）。"""
+    ico = os.path.join(ASSETS, "AppIcon.ico")
+    base = Image.open(png).convert("RGBA")
+    sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+    base.save(ico, format="ICO", sizes=sizes)
+    print("ICO:", ico)
+    return ico
+
+
 if __name__ == "__main__":
     p = make_icon()
     make_icns(p)
+    make_ico(p)

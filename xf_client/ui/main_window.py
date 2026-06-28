@@ -16,6 +16,8 @@ from ui.order_tab import OrderTab
 from ui.settings_tab import SettingsTab
 from license.license_validator import LicenseValidator
 from database.db_manager import db
+from utils.helpers import app_icon_path
+from config import APP_VERSION
 
 
 # 全局字体
@@ -26,8 +28,12 @@ GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("闲鱼采集上架助手 v3.0")
+        self.setWindowTitle(f"闲鱼采集上架助手 v{APP_VERSION}")
         self.setMinimumSize(1200, 800)
+
+        _icon = app_icon_path()
+        if _icon:
+            self.setWindowIcon(QIcon(_icon))
 
         # 设置全局字体
         font = QFont()

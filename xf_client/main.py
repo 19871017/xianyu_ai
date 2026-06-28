@@ -12,13 +12,19 @@ if os.path.exists(env_path):
                 os.environ[key.strip()] = value.strip()
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QIcon
 from ui.main_window import MainWindow
 from license.license_validator import LicenseValidator
+from utils.helpers import app_icon_path
 
 
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    icon_path = app_icon_path()
+    if icon_path:
+        app.setWindowIcon(QIcon(icon_path))
 
     # License检查
     validator = LicenseValidator()

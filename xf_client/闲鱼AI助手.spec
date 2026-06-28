@@ -8,9 +8,16 @@ _cfg=open('config.py',encoding='utf-8').read()
 _m=_re.search(r'APP_VERSION\s*=\s*[\"\']([^\"\']+)', _cfg)
 APP_VERSION=_m.group(1) if _m else '0.0.0'
 import os as _os
-ICON_PATH=_os.path.join(_os.path.dirname(_os.path.abspath(SPEC)) if 'SPEC' in dir() else _os.getcwd(),'assets','AppIcon.icns')
-if not _os.path.exists(ICON_PATH):
-    ICON_PATH='assets/AppIcon.icns'
+import sys as _sys
+_BASE=_os.path.dirname(_os.path.abspath(SPEC)) if 'SPEC' in dir() else _os.getcwd()
+ICNS_PATH=_os.path.join(_BASE,'assets','AppIcon.icns')
+if not _os.path.exists(ICNS_PATH):
+    ICNS_PATH='assets/AppIcon.icns'
+ICO_PATH=_os.path.join(_BASE,'assets','AppIcon.ico')
+if not _os.path.exists(ICO_PATH):
+    ICO_PATH='assets/AppIcon.ico'
+# EXE 图标：Windows 用 .ico，其余（mac/linux）用 .icns
+EXE_ICON=ICO_PATH if _sys.platform.startswith('win') else ICNS_PATH
 
 datas_drission, binaries_drission, hiddenimports_drission = collect_all('DrissionPage')
 datas_aiohttp, binaries_aiohttp, hiddenimports_aiohttp = collect_all('aiohttp')
@@ -34,6 +41,7 @@ a = Analysis(
         ('ui', 'ui'),
         ('utils', 'utils'),
         ('database', 'database'),
+        ('assets', 'assets'),
         (cert_file, 'certifi'),
         *datas_drission,
         *datas_aiohttp,
@@ -89,6 +97,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=EXE_ICON,
 )
 coll = COLLECT(
     exe,
@@ -102,7 +111,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='闲鱼AI助手.app',
-    icon=ICON_PATH,
+    icon=ICNS_PATH,
     bundle_identifier='com.xianyu.aihelper',
     version=APP_VERSION,
     info_plist={
