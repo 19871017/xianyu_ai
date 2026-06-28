@@ -188,19 +188,21 @@ class ListingTab(QWidget):
         table_layout = QVBoxLayout(table_group)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
-            "✓", "来源平台", "商品名称", "原价", "上架价", "状态", "操作"
+            "✓", "来源平台", "商品名称", "规格", "原价", "上架价", "状态", "操作"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(0, 36)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(1, 90)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(5, 90)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(3, 72)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(6, 70)
+        self.table.setColumnWidth(6, 90)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(7, 70)
         self.table.setFont(QFont(GLOBAL_FONT_FAMILY, 12))
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -562,7 +564,7 @@ class ListingTab(QWidget):
             status_item.setForeground(
                 QBrush(QColor("#2e7d32")) if success else QBrush(QColor("#c62828"))
             )
-            self.table.setItem(row, 5, status_item)
+            self.table.setItem(row, 6, status_item)
 
     def _on_listing_finished(self, results: list):
         self._reset_list_ui()
@@ -630,10 +632,23 @@ class ListingTab(QWidget):
             title = item.get("ai_title") or item.get("original_title") or item.get("title", "")
             self.table.setItem(i, 2, QTableWidgetItem(title[:60]))
 
-            self.table.setItem(i, 3, QTableWidgetItem(str(item.get("original_price", ""))))
+            sku_count = len(item.get("sku_list") or [])
+            if sku_count > 1:
+                spec_text = f"{sku_count} 规格"
+            elif sku_count == 1:
+                spec_text = "单规格"
+            else:
+                spec_text = "—"
+            spec_item = QTableWidgetItem(spec_text)
+            spec_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if sku_count > 1:
+                spec_item.setForeground(QColor("#00796b"))
+            self.table.setItem(i, 3, spec_item)
+
+            self.table.setItem(i, 4, QTableWidgetItem(str(item.get("original_price", ""))))
 
             new_price = item.get("new_price") or item.get("price") or item.get("original_price", "")
-            self.table.setItem(i, 4, QTableWidgetItem(str(new_price)))
+            self.table.setItem(i, 5, QTableWidgetItem(str(new_price)))
 
             status = item.get("status", "collected")
             status_map = {
@@ -641,7 +656,7 @@ class ListingTab(QWidget):
                 "listed_goofishpro": "✅闲管家",
                 "listed_xianyu": "✅闲鱼",
             }
-            self.table.setItem(i, 5, QTableWidgetItem(status_map.get(status, status)))
+            self.table.setItem(i, 6, QTableWidgetItem(status_map.get(status, status)))
 
             edit_btn = QPushButton("✏️ 编辑")
             edit_btn.setMinimumHeight(28)
@@ -651,7 +666,7 @@ class ListingTab(QWidget):
                 "QPushButton:hover { background: #00796b; }"
             )
             edit_btn.clicked.connect(lambda checked, idx=i: self._edit_item(idx))
-            self.table.setCellWidget(i, 6, edit_btn)
+            self.table.setCellWidget(i, 7, edit_btn)
 
         self._update_selected_count()
 
