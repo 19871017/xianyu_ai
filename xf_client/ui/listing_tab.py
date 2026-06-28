@@ -207,6 +207,11 @@ class ListingTab(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.empty_hint = QLabel("📭 暂无商品。请先到「🔍 采集」标签页采集，或点击下方「📂 导入商品包」导入。")
+        self.empty_hint.setStyleSheet("color: #999; font-size: 13px; padding: 16px;")
+        self.empty_hint.setWordWrap(True)
+        self.empty_hint.setVisible(False)
+        table_layout.addWidget(self.empty_hint)
         table_layout.addWidget(self.table)
 
         # 全选/取消 行
@@ -619,6 +624,9 @@ class ListingTab(QWidget):
     def refresh_items(self, items: list):
         self.items = items
         self.table.setRowCount(len(items))
+        if hasattr(self, 'empty_hint'):
+            self.empty_hint.setVisible(len(items) == 0)
+            self.table.setVisible(len(items) > 0)
 
         for i, item in enumerate(items):
             cb = QCheckBox()
