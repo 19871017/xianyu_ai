@@ -632,6 +632,82 @@ class AlibabaCollector:
     #  详情页采集
     # ═══════════════════════════════════════════════════════════
 
+    def _sanitize_description(self, text: str) -> str:
+        """清洗商品描述文本：剔除 CSS/base64/插件UI/评价噪声。
+
+        DOM 选择器([class*="desc"])与 CDN 富文本都可能混入非描述内容
+        (评价模块、采购助手插件注入的按钮文案等)，统一在此过滤。
+        中文字符不足时返回空串，由详情图承担商品展示。
+        """
+        if not text:
+            return ""
+        # 去掉残留的 CSS 规则块(选择器{...})与 @font-face/@media 等。
+        text = re.sub(r"@[\w-]+\s*\{[^{}]*\}", " ", text)
+        text = re.sub(r"[.#]?[\w][\w\s.,#:>()\[\]=\"'-]*\{[^{}]*\}", " ", text)
+        # 清理 base64 长串。
+        text = re.sub(r"[A-Za-z0-9+/]{80,}={0,2}", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        # 剔除采购助手插件注入的 UI 文案(非商品描述)。
+        for noise in (
+            "帮你找", "暂时关闭此按钮", "调整此按钮位置", "全网找同款",
+            "AI多角度分析", "全套图一键下", "商品信息增强", "商品数据导出",
+            "立即安装", "下载插件", "采购助手",
+        ):
+            text = text.replace(noise, " ")
+        # 剔除评价/评分区残留(如 "5.0 3条评价好评率 100%")。
+        text = re.sub(r"\d+(?:\.\d+)?\s*\d*\s*条?评价[^。]*?好评率\s*\d+\s*%?", " ", text)
+        text = re.sub(r"好评率\s*\d+\s*%?", " ", text)
+        text = re.sub(r"\d+\s*条评价", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        # 1688 批发品文字描述常稀少(主体是详情图)。要求足够多的中文才视为有效描述。
+        cn = len(re.findall(r"[\u4e00-\u9fff]", text))
+        return text[:2000] if cn >= 20 else ""
+
+    def _fetch_detail_content(self, product_html: str) -> tuple[list[str], str]:
+        """抓取 1688 富文本详情(详情图 + 描述文本)。
+
+        1688 详情描述/详情图不在主页面 DOM 中，而是托管在独立 CDN：
+        页面内嵌 ``"detailUrl":"https://itemcdn.tmall.com/1688offer/..."``。
+        该资源跨域(CORS)无法 fetch，但浏览器导航过去可读到其 HTML。
+        返回 (detail_image_urls, description_text)。导航后由调用方负责回到主页面。
+        """
+        m = re.search(r'"detailUrl"\s*:\s*"([^"]+)"', product_html or "")
+        if not m:
+            return [], ""
+        durl = m.group(1).replace("\\u002F", "/").replace("\\/", "/")
+        if not durl.startswith(("http://", "https://")):
+            return [], ""
+        try:
+            tab = self._safe_tab()
+            tab.get(durl)
+            time.sleep(2.5)
+            body = tab.html or ""
+        except Exception as e:
+            self._log(f"  \u26a0 详情富文本抓取失败: {e}")
+            return [], ""
+
+        imgs_raw = re.findall(
+            r'https?:\\?/\\?/[^"\'\\\s)]+?\.(?:jpg|jpeg|png|webp)', body, re.I)
+        seen = set()
+        detail_imgs = []
+        for u in imgs_raw:
+            u = u.replace("\\/", "/")
+            if u.startswith("//"):
+                u = "https:" + u
+            if not u.startswith(("http://", "https://")):
+                continue
+            if u in seen:
+                continue
+            seen.add(u)
+            detail_imgs.append(u)
+
+        # 描述文本：先整段剥离 style/script(含 CSS 规则/base64 字体), 再去标签, 统一清洗。
+        text = re.sub(r"<style[^>]*>.*?</style>", " ", body, flags=re.I | re.S)
+        text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.I | re.S)
+        text = re.sub(r"<[^>]+>", " ", text)
+        desc = self._sanitize_description(text)
+        return detail_imgs[:30], desc
+
     def _scrape_detail_page(self, url: str) -> dict | None:
         """采集1688商品详情页
 
@@ -819,6 +895,25 @@ class AlibabaCollector:
             detail_image_urls = [u for u in (_groups.get("detail") or []) if isinstance(u, str)]
             image_urls = main_image_urls + detail_image_urls
 
+            # ── 富文本详情(详情图+描述): 1688 托管在独立 CDN, 需导航抓取 ──
+            # 导航前先捕获主页面 HTML, 供后续 SKU 解析(导航后 tab.html 会变成 CDN 页)。
+            product_html = tab.html or ""
+            try:
+                cdn_imgs, cdn_desc = self._fetch_detail_content(product_html)
+            except Exception as e:
+                self._log(f"  ⚠ 详情富文本抓取异常: {e}")
+                cdn_imgs, cdn_desc = [], ""
+            if cdn_imgs:
+                _seen_d = set(detail_image_urls)
+                for _u in cdn_imgs:
+                    if _u not in _seen_d:
+                        _seen_d.add(_u)
+                        detail_image_urls.append(_u)
+                image_urls = main_image_urls + detail_image_urls
+            description = self._sanitize_description(description)
+            if cdn_desc and len(cdn_desc) > len(description or ""):
+                description = cdn_desc
+
             # ── 下载图片 (主图/详情图分目录, 共用去重池避免重复) ──
             item_dir = os.path.join(IMAGE_DIR, "1688_" + sanitize_filename(item_id or title[:20]))
             ensure_dir(item_dir)
@@ -855,7 +950,7 @@ class AlibabaCollector:
             # ── SKU 多规格多价格 (来自页面内嵌 skuModel，最稳定) ──
             sku_list = []
             try:
-                sku_list = parse_sku_from_html(tab.html or "")
+                sku_list = parse_sku_from_html(product_html or "")
             except Exception as e:
                 self._log(f"  ⚠ SKU 解析异常: {e}")
 
