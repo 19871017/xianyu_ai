@@ -59,6 +59,10 @@ EXPORT_HEADERS = [
 DEFAULT_STOCK = 1000
 PACKAGE_ATTR_KEY = "_full_product_package"
 
+# 闲鱼官方发布页「规格值最大长度为 12 个字」。spec1/spec2 是闲鱼实际展示的
+# 规格值，按此上限规整；完整原始规格保留在 source_spec，供回上游下单匹配。
+XIANYU_SPEC_VALUE_MAXLEN = 12
+
 
 def _clean_text(value: Any, max_len: int = 2000) -> str:
     if value is None:
@@ -240,7 +244,8 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
     for idx, sku in enumerate(sku_list):
         if not isinstance(sku, dict):
             continue
-        spec1 = _clean_text(
+        # 完整原始规格（清洗但不按闲鱼上限截断），用于 source_spec 回上游下单匹配。
+        spec1_full = _clean_text(
             sku.get("spec1")
             or sku.get("规格1")
             or sku.get("name")
@@ -250,7 +255,10 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
             or sku.get("thumbSpec")
             or "默认"
         , 120)
-        spec2 = _clean_text(sku.get("spec2") or sku.get("规格2") or sku.get("sub_spec") or "", 120)
+        spec2_full = _clean_text(sku.get("spec2") or sku.get("规格2") or sku.get("sub_spec") or "", 120)
+        # spec1/spec2 是闲鱼实际展示的规格值，按闲鱼「最大 12 字」规整。
+        spec1 = spec1_full[:XIANYU_SPEC_VALUE_MAXLEN]
+        spec2 = spec2_full[:XIANYU_SPEC_VALUE_MAXLEN]
         price = _as_float(sku.get("price") or sku.get("价格") or sku.get("group_price") or base_price)
         # 库存可能为合法的 0（售罄/缺货），不能用 or 兜底，否则会被错误重置。
         stock = base_stock
@@ -298,7 +306,11 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
                 or ""
             ),
             "source_spec": _clean_text(
-                sku.get("source_spec") or sku.get("specAttrs") or "", 120
+                sku.get("source_spec")
+                or sku.get("specAttrs")
+                # 回退到完整原始规格（未按闲鱼 12 字截断），回上游下单匹配用。
+                or (f"{spec1_full}>{spec2_full}" if spec2_full else spec1_full),
+                120,
             ),
             "raw": sku.get("raw") or {},
         })

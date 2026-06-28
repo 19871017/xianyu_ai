@@ -43,7 +43,7 @@ SPEC_TYPE_KEYWORDS = {
     "高度": ("高", "高度", "厚"),
     "总量": ("总量", "总", "量"),
 }
-SPEC_VALUE_MAXLEN = 30
+SPEC_VALUE_MAXLEN = 12  # 闲鱼发布页「规格值最大长度为12个字」
 
 
 class XianyuLister:

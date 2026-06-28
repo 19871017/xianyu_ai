@@ -105,5 +105,47 @@ class TestPackageSourceBlock(unittest.TestCase):
         self.assertEqual(item["source_platform"], "jd")
 
 
+class TestXianyuSpecNormalize(unittest.TestCase):
+    """规格按闲鱼「最大12字」规整，且 source_spec 保留完整原始规格（回上游下单用）。"""
+
+    def test_spec_truncated_to_12_source_spec_full(self):
+        item = {
+            "title": "情趣套装",
+            "source_url": "https://detail.1688.com/offer/1.html",
+            "sku_list": [
+                {"spec1": "黑色套装+L25发箍+L28羽毛+超长加项", "spec2": "", "price": 10.5, "stock": 9},
+            ],
+        }
+        skus = normalize_sku_list(item)
+        self.assertEqual(len(skus), 1)
+        # 闲鱼展示规格值截到 12 字
+        self.assertLessEqual(len(skus[0]["spec1"]), 12)
+        # source_spec 保留完整原始规格（>12 字）
+        self.assertIn("超长加项", skus[0]["source_spec"])
+
+    def test_two_axis_source_spec_join(self):
+        item = {
+            "title": "x",
+            "sku_list": [
+                {"spec1": "超长颜色规格名称abcdefg", "spec2": "超长尺码规格名称hijklmn", "price": 1, "stock": 1},
+            ],
+        }
+        skus = normalize_sku_list(item)
+        self.assertLessEqual(len(skus[0]["spec1"]), 12)
+        self.assertLessEqual(len(skus[0]["spec2"]), 12)
+        # 双轴时 source_spec 用 > 连接完整规格
+        self.assertIn(">", skus[0]["source_spec"])
+
+    def test_explicit_source_spec_kept(self):
+        item = {
+            "title": "x",
+            "sku_list": [
+                {"spec1": "红色", "spec2": "", "source_spec": "原始规格值", "price": 1, "stock": 1},
+            ],
+        }
+        skus = normalize_sku_list(item)
+        self.assertEqual(skus[0]["source_spec"], "原始规格值")
+
+
 if __name__ == "__main__":
     unittest.main()

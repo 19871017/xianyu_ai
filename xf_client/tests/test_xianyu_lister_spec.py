@@ -19,7 +19,7 @@ class TestNormSpec(unittest.TestCase):
     def test_strip_and_truncate(self):
         self.assertEqual(XianyuLister._norm_spec("  红色  "), "红色")
         self.assertEqual(XianyuLister._norm_spec(None), "")
-        self.assertEqual(len(XianyuLister._norm_spec("超" * 50)), 30)
+        self.assertEqual(len(XianyuLister._norm_spec("超" * 50)), 12)
 
 
 class TestCollectSpecAxes(unittest.TestCase):
