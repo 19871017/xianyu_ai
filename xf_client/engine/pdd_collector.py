@@ -593,6 +593,141 @@ class PddCollector:
 
     # ──────────────────────── 采集核心 ────────────────────────
 
+    def _parse_ssr_item(self, g: dict, source_url: str = "") -> dict | None:
+        """解析搜索页 SSR(ssrListData.list)的单个商品项。
+
+        拼多多移动端搜索页是服务端渲染，商品列表直接挂在
+        window.rawData.stores.store.data.ssrListData.list，
+        无需逆向 anti_content。priceInfo 是用户可见显示价(元)，
+        price 是分；优先用 priceInfo。
+        """
+        try:
+            goods_id = str(g.get("goodsID") or g.get("goodsId") or "").strip()
+            if not goods_id or goods_id in self.seen_ids:
+                return None
+            title = str(g.get("goodsName") or "").strip()[:200]
+            if not title:
+                return None
+            self.seen_ids.add(goods_id)
+
+            price = 0.0
+            price_info = g.get("priceInfo")
+            if price_info not in (None, ""):
+                try:
+                    price = round(float(str(price_info)), 2)
+                except Exception:
+                    price = 0.0
+            if price <= 0:
+                p = g.get("price")
+                if isinstance(p, (int, float)) and p > 0:
+                    price = round(float(p) / 100, 2)
+
+            img = str(g.get("imgUrl") or g.get("longImgUrl") or "").strip()
+            if img.startswith("//"):
+                img = "https:" + img
+            img_urls = [img] if img.startswith(("http://", "https://")) else []
+
+            sales = str(g.get("salesTip") or "").strip()
+            spec = str(g.get("specName") or "").strip()
+            link = f"https://mobile.yangkeduo.com/goods.html?goods_id={goods_id}"
+
+            return {
+                "item_id": f"pdd_{goods_id}",
+                "platform": "pdd",
+                "title": title,
+                "original_title": title,
+                "description": "",
+                "original_price": str(price),
+                "price": price,
+                "image_urls": img_urls,
+                "local_images": [],
+                "image_dir": "",
+                "attributes": {"规格": spec} if spec else {},
+                "seller": "",
+                "seller_credit": "",
+                "wants": sales,
+                "views": "0",
+                "collects": "0",
+                "link": link,
+                "source_url": link,
+                "source_item_id": goods_id,
+            }
+        except Exception:
+            return None
+
+    def _extract_ssr_flip(self) -> str:
+        """提取搜索页 flip 翻页令牌 + lastPage 标志(window.rawData)。"""
+        js = r"""
+        try {
+          var d = window.rawData.stores.store.data;
+          var sd = d.ssrListData || {};
+          return JSON.stringify({flip: sd.flip || "", lastPage: !!sd.lastPage});
+        } catch(e){ return "{}"; }
+        """
+        try:
+            data = json.loads(self.tab.run_js(js) or "{}")
+            self._ssr_last_page = bool(data.get("lastPage"))
+            return str(data.get("flip") or "")
+        except Exception:
+            return ""
+
+    def _extract_ssr_list(self) -> list:
+        """从当前搜索页提取 SSR 商品列表(window.rawData)。"""
+        js = r"""
+        try {
+          var rd = window.rawData;
+          if (!rd || !rd.stores || !rd.stores.store || !rd.stores.store.data) return "[]";
+          var d = rd.stores.store.data;
+          var candidates = [];
+          if (d.ssrListData && Array.isArray(d.ssrListData.list)) candidates.push(d.ssrListData.list);
+          if (d.dataMap) { for (var k in d.dataMap) { if (d.dataMap[k] && Array.isArray(d.dataMap[k].list)) candidates.push(d.dataMap[k].list); } }
+          for (var i=0;i<candidates.length;i++){ if (candidates[i].length) return JSON.stringify(candidates[i]); }
+          return "[]";
+        } catch(e){ return "[]"; }
+        """
+        try:
+            raw_json = self.tab.run_js(js) or "[]"
+            return json.loads(raw_json) or []
+        except Exception as e:
+            self._log(f"  \u2717 SSR 提取异常: {e}")
+            return []
+
+    def _collect_via_ssr(self, keyword: str, count: int, page: int = 1, flip: str = "") -> list:
+        """\u2605 主方法：搜索页 SSR 提取(无需逆向 anti_content)。"""
+        items = []
+        if page > 1 and flip:
+            from urllib.parse import quote
+            search_url = PDD_MOBILE_SEARCH.format(kw=keyword, page=page) + "&flip=" + quote(flip)
+        else:
+            search_url = PDD_MOBILE_SEARCH.format(kw=keyword, page=page)
+        self._log(f"  \U0001f310 [SSR模式] 搜索: {keyword} 第{page}页")
+        self._safe_tab().get(search_url)
+        time.sleep(random.uniform(2.0, 3.0))
+        for _ in range(2):
+            try:
+                self.tab.run_js("window.scrollBy(0, window.innerHeight * 0.8);")
+            except Exception:
+                pass
+            time.sleep(random.uniform(0.6, 1.0))
+
+        goods = self._extract_ssr_list()
+        self._ssr_hit = bool(goods)
+        self._ssr_flip = self._extract_ssr_flip() or flip
+        if not goods:
+            self._log("  \u26a0 SSR 未取到商品列表")
+            return []
+        self._log(f"  \U0001f4e6 SSR 命中 {len(goods)} 个商品")
+
+        for g in goods:
+            if not isinstance(g, dict):
+                continue
+            item = self._parse_ssr_item(g, search_url)
+            if item:
+                items.append(item)
+            if len(items) >= count:
+                break
+        return items
+
     def _collect_via_listener(
         self, keyword: str, count: int, page: int = 1
     ) -> list:
@@ -879,36 +1014,51 @@ class PddCollector:
             else:
                 self._log("✅ 已登录（使用保存的Cookie）")
 
-            # 分页采集
+            # 分页采集(flip token 翻页，降低重复率)
+            self._ssr_flip = ""
+            self._ssr_last_page = False
+            self._ssr_hit = False
             page = 1
-            max_pages = min(5, (count // 20) + 2)
+            max_pages = min(20, (count // 15) + 3)
+            empty_streak = 0
 
             while len(self.items) < count and page <= max_pages:
                 need = count - len(self.items)
                 self._log(f"\n📄 第 {page} 页（还需 {need} 个）...")
 
-                # 主要方法：网络监听
-                page_items = self._collect_via_listener(keyword, need, page)
+                # 主方法：搜索页 SSR 提取（flip 翻页）
+                page_items = self._collect_via_ssr(keyword, need, page, self._ssr_flip)
 
-                # 备用方法：DOM解析
-                if not page_items:
-                    self._log("  监听未获取数据，切换DOM模式...")
-                    page_items = self._collect_via_dom(keyword)
+                # 仅当 SSR 完全失效(连原始列表都没有)才走兜底
+                if not page_items and not self._ssr_hit:
+                    self._log("  SSR 未获取数据，切换监听模式...")
+                    page_items = self._collect_via_listener(keyword, need, page)
+                    if not page_items:
+                        self._log("  监听未获取数据，切换DOM模式...")
+                        page_items = self._collect_via_dom(keyword)
+                    if not page_items:
+                        self._log("  ⚠ 三种模式均无数据，停止")
+                        break
 
-                if not page_items:
-                    self._log("  ⚠ 两种模式均无数据，停止")
-                    break
+                if page_items:
+                    self._log(f"  📥 下载 {len(page_items)} 个商品的图片...")
+                    page_items = self._batch_download_images(page_items)
+                    self.items.extend(page_items)
+                    self._log(f"  第{page}页完成，累计 {len(self.items)} 个")
+                    empty_streak = 0
+                else:
+                    empty_streak += 1
+                    self._log(f"  第{page}页无新增(连续{empty_streak}次)")
+                    if empty_streak >= 3:
+                        self._log("  连续多页无新增，停止")
+                        break
 
-                # 下载图片
-                self._log(f"  📥 下载 {len(page_items)} 个商品的图片...")
-                page_items = self._batch_download_images(page_items)
-                self.items.extend(page_items)
-
-                self._log(f"  第{page}页完成，累计 {len(self.items)} 个")
                 page += 1
-
+                if self._ssr_last_page:
+                    self._log("  已到最后一页")
+                    break
                 if len(self.items) < count:
-                    time.sleep(random.uniform(2.0, 4.0))
+                    time.sleep(random.uniform(1.5, 3.0))
 
             result = self.items[:count]
             self._log(f"\n✅ 拼多多采集完成：{len(result)} 个商品")
