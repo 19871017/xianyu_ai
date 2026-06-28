@@ -789,10 +789,12 @@ class CollectTab(QWidget):
         self._append_log(f"💾 数据已保存到本地数据库，关闭软件不会丢失")
         if export_dir:
             self._append_log(f"📦 商品包已导出: {export_dir}")
+        self._append_log("➡ 下一步：切换到「📦 上架闲鱼」标签页，勾选商品即可上架")
         QMessageBox.information(
             self, "完成",
             f"采集完成，共 {len(normalized_items)} 个商品，{total_skus} 个SKU，{total_imgs} 张图片\n数据已自动保存"
             + (f"\n\n商品包已导出:\n{export_dir}" if export_dir else "")
+            + "\n\n➡ 下一步：切换到「📦 上架闲鱼」标签页，勾选商品即可上架"
         )
 
     def _on_error(self, msg):

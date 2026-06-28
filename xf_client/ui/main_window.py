@@ -26,7 +26,7 @@ GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("闲管家采集上架助手 v3.0")
+        self.setWindowTitle("闲鱼采集上架助手 v3.0")
         self.setMinimumSize(1200, 800)
 
         # 设置全局字体
