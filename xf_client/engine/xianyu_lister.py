@@ -21,6 +21,8 @@ from __future__ import annotations
 import os
 import re
 import time
+import hashlib
+import tempfile
 from typing import Any, Callable
 
 from config import PLATFORM_URLS
@@ -30,6 +32,46 @@ from utils.login_manager import ensure_login
 PUBLISH_URL = PLATFORM_URLS["xianyu"]["publish"]
 
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".heic", ".webp")
+
+# 闲鱼发布页实际接受的上传格式；webp/heic 会被拒（报「不支持的图片类型」），
+# 故上传前统一转成 jpg。
+XIANYU_UPLOAD_EXTS = (".jpg", ".jpeg", ".png")
+_IMG_CONVERT_CACHE_DIR = os.path.join(tempfile.gettempdir(), "xianyu_img_jpg")
+
+
+def to_uploadable_image(path: str) -> str | None:
+    """把本地图片转成闲鱼可上传格式（jpg），返回可上传路径。
+
+    闲鱼发布页只接受 jpg/jpeg/png，webp/heic 会报「不支持的图片类型」。
+    - 已是安全格式：原样返回。
+    - webp/heic 等：用 Pillow 转 jpg 缓存（按源路径+mtime+size 去重）后返回新路径。
+    - 文件不存在 / 缺 Pillow / 转码失败：返回 None（调用方跳过）。
+    """
+    if not path or not os.path.isfile(path):
+        return None
+    ext = os.path.splitext(path)[1].lower()
+    if ext in XIANYU_UPLOAD_EXTS:
+        return path
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        os.makedirs(_IMG_CONVERT_CACHE_DIR, exist_ok=True)
+        st = os.stat(path)
+        key = hashlib.md5(
+            f"{path}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8")
+        ).hexdigest()
+        out_path = os.path.join(_IMG_CONVERT_CACHE_DIR, key + ".jpg")
+        if os.path.isfile(out_path):
+            return out_path
+        img = Image.open(path)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        img.save(out_path, "JPEG", quality=90)
+        return out_path
+    except Exception:
+        return None
 
 # 闲鱼官方发布页「规格类型」下拉为固定选项，采集数据的规格类型名不一定命中，
 # 故按规格值关键词推断，未命中时回退到第一项「颜色」。
@@ -180,10 +222,12 @@ class XianyuLister:
 
     def _upload_images(self, paths: list[str]) -> int:
         """上传本地主图到「添加首图」file input。返回提交的图片数。"""
-        valid = [
-            p for p in (paths or [])
-            if p and os.path.isfile(p) and p.lower().endswith(IMG_EXTS)
-        ]
+        valid = []
+        for p in (paths or []):
+            if p and os.path.isfile(p) and p.lower().endswith(IMG_EXTS):
+                conv = to_uploadable_image(p)
+                if conv:
+                    valid.append(conv)
         if not valid:
             return 0
         try:
@@ -303,8 +347,11 @@ class XianyuLister:
             file_idx = idx + 1
             if file_idx >= len(files):
                 continue
+            conv = to_uploadable_image(img)
+            if not conv:
+                continue
             try:
-                files[file_idx].input(img)
+                files[file_idx].input(conv)
                 time.sleep(1.2)
                 done += 1
             except Exception as e:
