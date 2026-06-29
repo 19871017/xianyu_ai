@@ -8,6 +8,10 @@ API_LICENSE_VERIFY   = f"{SERVER_BASE_URL}/api/license/verify"
 API_AUTH_REGISTER    = f"{SERVER_BASE_URL}/api/auth/register"
 API_AUTH_LOGIN       = f"{SERVER_BASE_URL}/api/auth/login"
 API_LICENSE_HEARTBEAT = f"{SERVER_BASE_URL}/api/license/heartbeat"
+# 公开更新检测：返回某平台最新版本（无需登录态）。platform=mac/win。
+API_PUBLIC_LATEST    = f"{SERVER_BASE_URL}/api/public/latest"
+# 下载站首页：客户端检测到新版本后，点「确定」跳转此处下载。
+DOWNLOAD_SITE_URL    = os.environ.get("XF_DOWNLOAD_SITE_URL", f"{SERVER_BASE_URL}/")
 
 # 客户端调用 activate/verify/heartbeat 必须携带的密钥（与服务端 CLIENT_API_KEY 一致）。
 # 优先环境变量，便于分发时不写死在源码里。

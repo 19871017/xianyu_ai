@@ -61,6 +61,8 @@ def init_db():
     import models.license_model  # noqa: F401
     import models.device  # noqa: F401
     import models.audit_log  # noqa: F401
+    import models.app_version  # noqa: F401
+    import models.announcement  # noqa: F401
     Base.metadata.create_all(bind=engine)
     try:
         _run_column_migrations()

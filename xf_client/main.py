@@ -16,6 +16,7 @@ from PyQt6.QtGui import QIcon
 from ui.main_window import MainWindow
 from license.license_validator import LicenseValidator
 from utils.helpers import app_icon_path
+from ui.update_prompt import UpdatePromptManager
 
 
 def main():
@@ -32,6 +33,10 @@ def main():
 
     window = MainWindow()
     window.show()
+
+    # 启动后异步检测新版本，有更新则弹窗引导到下载站（不阻塞启动）。
+    window._update_prompt = UpdatePromptManager(window)
+    window._update_prompt.start()
 
     sys.exit(app.exec())
 

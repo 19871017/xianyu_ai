@@ -69,6 +69,8 @@
             <div class="tab" onclick="switchTab('licenses')">License</div>
             <div class="tab" onclick="switchTab('devices')">设备</div>
             <div class="tab" onclick="switchTab('audit')">审计日志</div>
+            <div class="tab" onclick="switchTab('versions')">版本发布</div>
+            <div class="tab" onclick="switchTab('announcements')">公告</div>
         </div>
         <div class="table-wrap">
             <div id="tab-users">
@@ -98,6 +100,25 @@
                 <table>
                     <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>IP</th><th>详情</th></tr></thead>
                     <tbody id="audit-body"></tbody>
+                </table>
+            </div>
+            <div id="tab-versions" style="display:none">
+                <div style="display:flex;gap:8px;margin-bottom:16px">
+                    <button class="btn btn-success" onclick="showUploadModal()">上传安装包</button>
+                    <button class="btn btn-primary" onclick="showVersionLinkModal()">用外部链接登记</button>
+                </div>
+                <table>
+                    <thead><tr><th>ID</th><th>平台</th><th>版本</th><th>下载</th><th>大小</th><th>最新</th><th>强制</th><th>更新说明</th><th>时间</th><th>操作</th></tr></thead>
+                    <tbody id="versions-body"></tbody>
+                </table>
+            </div>
+            <div id="tab-announcements" style="display:none">
+                <div style="display:flex;gap:8px;margin-bottom:16px">
+                    <button class="btn btn-success" onclick="showAnnModal()">发布公告</button>
+                </div>
+                <table>
+                    <thead><tr><th>ID</th><th>标题</th><th>内容</th><th>状态</th><th>置顶</th><th>时间</th><th>操作</th></tr></thead>
+                    <tbody id="announcements-body"></tbody>
                 </table>
             </div>
         </div>
@@ -137,6 +158,51 @@
             <div class="form-actions">
                 <button class="btn" onclick="closeModal('extend-modal')">取消</button>
                 <button class="btn btn-primary" onclick="doExtend()">续期</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="upload-modal">
+        <div class="modal-box">
+            <h3>上传安装包</h3>
+            <div class="form-group"><label>平台</label><select id="up-platform"><option value="mac">Mac</option><option value="win">Windows</option></select></div>
+            <div class="form-group"><label>版本号</label><input type="text" id="up-version" placeholder="如 3.2.0"></div>
+            <div class="form-group"><label>安装包文件</label><input type="file" id="up-file"><div class="hint">Mac: .dmg/.pkg/.zip　Windows: .exe/.msi/.zip</div></div>
+            <div class="form-group"><label>更新说明</label><textarea id="up-notes" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px" placeholder="本次更新内容（每行一条）"></textarea></div>
+            <div class="form-group"><label><input type="checkbox" id="up-force"> 强制更新（客户端提示不可跳过）</label></div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('upload-modal')">取消</button>
+                <button class="btn btn-success" id="up-submit" onclick="doUpload()">上传并发布</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="vlink-modal">
+        <div class="modal-box">
+            <h3>用外部链接登记版本</h3>
+            <div class="form-group"><label>平台</label><select id="vl-platform"><option value="mac">Mac</option><option value="win">Windows</option></select></div>
+            <div class="form-group"><label>版本号</label><input type="text" id="vl-version" placeholder="如 3.2.0"></div>
+            <div class="form-group"><label>下载直链</label><input type="text" id="vl-url" placeholder="https://...（对象存储/网盘直链）"></div>
+            <div class="form-group"><label>更新说明</label><textarea id="vl-notes" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px"></textarea></div>
+            <div class="form-group"><label><input type="checkbox" id="vl-force"> 强制更新</label></div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('vlink-modal')">取消</button>
+                <button class="btn btn-primary" onclick="doVersionLink()">登记</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="ann-modal">
+        <div class="modal-box">
+            <h3 id="ann-title-h">发布公告</h3>
+            <input type="hidden" id="ann-id">
+            <div class="form-group"><label>标题</label><input type="text" id="ann-title" placeholder="公告标题"></div>
+            <div class="form-group"><label>内容</label><textarea id="ann-content" rows="4" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px"></textarea></div>
+            <div class="form-group"><label>置顶权重（越大越靠前）</label><input type="number" id="ann-pinned" value="0"></div>
+            <div class="form-group"><label><input type="checkbox" id="ann-pub" checked> 发布（取消则前台不展示）</label></div>
+            <div class="form-actions">
+                <button class="btn" onclick="closeModal('ann-modal')">取消</button>
+                <button class="btn btn-success" onclick="doAnnSave()">保存</button>
             </div>
         </div>
     </div>
@@ -295,12 +361,154 @@
         }
 
         function switchTab(tab) {
-            const order = ['users', 'licenses', 'devices', 'audit'];
+            const order = ['users', 'licenses', 'devices', 'audit', 'versions', 'announcements'];
             document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', order[i] === tab));
             order.forEach(t => document.getElementById('tab-' + t).style.display = t === tab ? '' : 'none');
             if (tab === 'audit') loadAudit();
+            if (tab === 'versions') loadVersions();
+            if (tab === 'announcements') loadAnnouncements();
         }
         window.switchTab = switchTab;
+
+        function fmtSize(n) {
+            n = Number(n) || 0;
+            if (n <= 0) return '-';
+            if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+            return (n / 1024 / 1024).toFixed(1) + ' MB';
+        }
+
+        async function loadVersions() {
+            try {
+                const vs = await api('/api/admin/versions');
+                document.getElementById('versions-body').innerHTML = vs.map(v => `
+                    <tr>
+                        <td>${v.id}</td>
+                        <td>${v.platform === 'mac' ? 'Mac' : 'Windows'}</td>
+                        <td class="mono">${v.version}</td>
+                        <td>${v.download_url ? `<a href="${v.download_url}" target="_blank">下载</a>` : '-'}</td>
+                        <td>${fmtSize(v.file_size)}</td>
+                        <td>${v.is_latest ? '<span class="status-active">最新</span>' : '-'}</td>
+                        <td>${v.force_update ? '<span class="status-expired">强制</span>' : '-'}</td>
+                        <td style="max-width:220px;white-space:pre-line;font-size:12px;color:#6b7685">${(v.release_notes || '-').slice(0, 120)}</td>
+                        <td>${formatTime(v.created_at)}</td>
+                        <td><button class="btn btn-danger btn-sm" onclick="doDeleteVersion(${v.id})">删除</button></td>
+                    </tr>`).join('') || '<tr><td colspan="10" class="empty">暂无版本，点上方按钮发布</td></tr>';
+            } catch (e) { console.error(e); }
+        }
+
+        function showUploadModal() {
+            document.getElementById('up-version').value = '';
+            document.getElementById('up-file').value = '';
+            document.getElementById('up-notes').value = '';
+            document.getElementById('up-force').checked = false;
+            document.getElementById('upload-modal').classList.add('show');
+        }
+
+        async function doUpload() {
+            const platform = document.getElementById('up-platform').value;
+            const version = document.getElementById('up-version').value.trim();
+            const fileEl = document.getElementById('up-file');
+            const notes = document.getElementById('up-notes').value;
+            const force = document.getElementById('up-force').checked;
+            if (!version) { showToast('请填写版本号', 'error'); return; }
+            if (!fileEl.files.length) { showToast('请选择安装包文件', 'error'); return; }
+            const fd = new FormData();
+            fd.append('platform', platform);
+            fd.append('version', version);
+            fd.append('release_notes', notes);
+            fd.append('force_update', force);
+            fd.append('file', fileEl.files[0]);
+            const btn = document.getElementById('up-submit');
+            btn.disabled = true; btn.textContent = '上传中…';
+            try {
+                const res = await fetch('/api/admin/version/upload', {
+                    method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: fd,
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+                showToast('上传并发布成功');
+                closeModal('upload-modal'); loadVersions();
+            } catch (e) { showToast('上传失败: ' + e.message, 'error'); }
+            finally { btn.disabled = false; btn.textContent = '上传并发布'; }
+        }
+
+        function showVersionLinkModal() {
+            document.getElementById('vl-version').value = '';
+            document.getElementById('vl-url').value = '';
+            document.getElementById('vl-notes').value = '';
+            document.getElementById('vl-force').checked = false;
+            document.getElementById('vlink-modal').classList.add('show');
+        }
+
+        async function doVersionLink() {
+            const platform = document.getElementById('vl-platform').value;
+            const version = document.getElementById('vl-version').value.trim();
+            const url = document.getElementById('vl-url').value.trim();
+            const notes = document.getElementById('vl-notes').value;
+            const force = document.getElementById('vl-force').checked;
+            if (!version) { showToast('请填写版本号', 'error'); return; }
+            if (!url) { showToast('请填写下载直链', 'error'); return; }
+            try {
+                await api('/api/admin/version', { method: 'POST', body: JSON.stringify({ platform, version, download_url: url, release_notes: notes, force_update: force }) });
+                showToast('登记成功'); closeModal('vlink-modal'); loadVersions();
+            } catch (e) { showToast('登记失败: ' + e.message, 'error'); }
+        }
+
+        async function doDeleteVersion(id) {
+            if (!confirm('确定删除此版本？关联的本地安装包文件也会被删除。')) return;
+            try { await api(`/api/admin/version/${id}`, { method: 'DELETE' }); showToast('已删除'); loadVersions(); }
+            catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+        }
+
+        async function loadAnnouncements() {
+            try {
+                const as = await api('/api/admin/announcements');
+                document.getElementById('announcements-body').innerHTML = as.map(a => `
+                    <tr>
+                        <td>${a.id}</td>
+                        <td>${a.title}</td>
+                        <td style="max-width:280px;white-space:pre-line;font-size:12px;color:#6b7685">${(a.content || '-').slice(0, 140)}</td>
+                        <td class="${a.is_published ? 'status-active' : 'status-inactive'}">${a.is_published ? '已发布' : '草稿'}</td>
+                        <td>${a.pinned || 0}</td>
+                        <td>${formatTime(a.created_at)}</td>
+                        <td><div class="btn-group">
+                            <button class="btn btn-primary btn-sm" onclick='showAnnModal(${JSON.stringify(a)})'>编辑</button>
+                            <button class="btn btn-danger btn-sm" onclick="doDeleteAnn(${a.id})">删除</button>
+                        </div></td>
+                    </tr>`).join('') || '<tr><td colspan="7" class="empty">暂无公告</td></tr>';
+            } catch (e) { console.error(e); }
+        }
+
+        function showAnnModal(a) {
+            document.getElementById('ann-title-h').textContent = a ? '编辑公告' : '发布公告';
+            document.getElementById('ann-id').value = a ? a.id : '';
+            document.getElementById('ann-title').value = a ? a.title : '';
+            document.getElementById('ann-content').value = a ? (a.content || '') : '';
+            document.getElementById('ann-pinned').value = a ? (a.pinned || 0) : 0;
+            document.getElementById('ann-pub').checked = a ? !!a.is_published : true;
+            document.getElementById('ann-modal').classList.add('show');
+        }
+
+        async function doAnnSave() {
+            const id = document.getElementById('ann-id').value;
+            const title = document.getElementById('ann-title').value.trim();
+            const content = document.getElementById('ann-content').value;
+            const pinned = parseInt(document.getElementById('ann-pinned').value) || 0;
+            const is_published = document.getElementById('ann-pub').checked;
+            if (!title) { showToast('请填写标题', 'error'); return; }
+            const body = JSON.stringify({ title, content, pinned, is_published });
+            try {
+                if (id) await api(`/api/admin/announcement/${id}`, { method: 'PUT', body });
+                else await api('/api/admin/announcement', { method: 'POST', body });
+                showToast('已保存'); closeModal('ann-modal'); loadAnnouncements();
+            } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
+        }
+
+        async function doDeleteAnn(id) {
+            if (!confirm('确定删除此公告？')) return;
+            try { await api(`/api/admin/announcement/${id}`, { method: 'DELETE' }); showToast('已删除'); loadAnnouncements(); }
+            catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+        }
 
         function copyText(text) { navigator.clipboard.writeText(text).then(() => showToast('已复制')); }
         function closeModal(id) { document.getElementById(id).classList.remove('show'); }

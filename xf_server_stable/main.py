@@ -8,6 +8,7 @@ from services.auth_service import ensure_admin_exists
 from routers.auth import router as auth_router
 from routers.license_api import router as license_router
 from routers.admin import router as admin_router
+from routers.release_api import router as release_router
 from utils.rsa_utils import ensure_keys
 import config
 import os
@@ -61,11 +62,7 @@ if config.CORS_ORIGINS:
 app.include_router(auth_router)
 app.include_router(license_router)
 app.include_router(admin_router)
-
-
-@app.get("/")
-def root():
-    return {"message": "闲鱼AI助手后端服务", "version": "2.1.0", "docs": "/docs"}
+app.include_router(release_router)
 
 
 @app.get("/admin")

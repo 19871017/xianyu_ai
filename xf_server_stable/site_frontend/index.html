@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>闲鱼AI助手 - 多平台电商采集上架工具</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: linear-gradient(160deg,#eef3fb 0%,#f7f8fa 60%); color: #1f2733; min-height: 100vh; }
+  .nav { background: #1976d2; color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 8px rgba(25,118,210,.25); }
+  .nav .brand { font-size: 18px; font-weight: 700; letter-spacing: .5px; }
+  .nav .ver { font-size: 13px; opacity: .85; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+  .hero { text-align: center; padding: 28px 0 8px; }
+  .hero h1 { font-size: 30px; font-weight: 800; margin-bottom: 10px; }
+  .hero p { font-size: 15px; color: #5a6675; line-height: 1.7; }
+  .section { background: #fff; border-radius: 14px; padding: 24px; margin-top: 24px; box-shadow: 0 4px 20px rgba(31,39,51,.06); }
+  .section h2 { font-size: 17px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  .section h2 .ic { width: 6px; height: 18px; background: #1976d2; border-radius: 3px; display: inline-block; }
+  .dl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px){ .dl-grid { grid-template-columns: 1fr; } .hero h1{font-size:24px;} }
+  .dl-card { border: 1.5px solid #e6ebf2; border-radius: 12px; padding: 20px; transition: .2s; position: relative; }
+  .dl-card.rec { border-color: #1976d2; box-shadow: 0 0 0 3px rgba(25,118,210,.1); }
+  .dl-card .os { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .dl-card .os .logo { font-size: 22px; }
+  .dl-card .vinfo { font-size: 13px; color: #6b7685; margin: 10px 0 4px; }
+  .dl-card .notes { font-size: 12px; color: #8a94a3; white-space: pre-line; max-height: 72px; overflow: auto; margin-bottom: 14px; }
+  .dl-card .badge { position: absolute; top: -10px; right: 14px; background: #1976d2; color: #fff; font-size: 11px; padding: 3px 10px; border-radius: 10px; }
+  .btn-dl { display: inline-block; width: 100%; text-align: center; padding: 11px 0; border-radius: 8px; background: #1976d2; color: #fff; font-size: 14px; font-weight: 600; text-decoration: none; border: none; cursor: pointer; transition: .15s; }
+  .btn-dl:hover { background: #1565c0; }
+  .btn-dl.disabled { background: #c4ccd6; cursor: not-allowed; pointer-events: none; }
+  .ann-item { border-left: 3px solid #1976d2; padding: 10px 14px; background: #f7faff; border-radius: 0 8px 8px 0; margin-bottom: 12px; }
+  .ann-item:last-child { margin-bottom: 0; }
+  .ann-item .t { font-weight: 700; font-size: 14px; display:flex; align-items:center; gap:8px; }
+  .ann-item .pin { background:#ef6c00; color:#fff; font-size:10px; padding:1px 7px; border-radius:8px; }
+  .ann-item .c { font-size: 13px; color: #5a6675; margin-top: 6px; white-space: pre-line; line-height: 1.6; }
+  .ann-item .d { font-size: 11px; color: #9aa3b1; margin-top: 6px; }
+  .empty { text-align: center; color: #9aa3b1; font-size: 13px; padding: 18px; }
+  .foot { text-align: center; color: #9aa3b1; font-size: 12px; margin-top: 32px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="nav">
+  <span class="brand">🐟 闲鱼AI助手</span>
+  <span class="ver">多平台电商采集 · 一键上架</span>
+</div>
+<div class="wrap">
+  <div class="hero">
+    <h1>多平台商品采集 · 智能整理 · 一键上架闲鱼</h1>
+    <p>支持 1688 / 淘宝 / 京东 / 拼多多 多规格商品采集，自动整理打包，AI 优化文案，一键发布到闲鱼。</p>
+  </div>
+
+  <div class="section">
+    <h2><span class="ic"></span>软件下载</h2>
+    <div class="dl-grid">
+      <div class="dl-card" id="card-mac">
+        <div class="os"><span class="logo">🍎</span> macOS 版</div>
+        <div class="vinfo" id="mac-vinfo">加载中…</div>
+        <div class="notes" id="mac-notes"></div>
+        <a class="btn-dl disabled" id="mac-btn" href="#">暂无下载</a>
+      </div>
+      <div class="dl-card" id="card-win">
+        <div class="os"><span class="logo">🪟</span> Windows 版</div>
+        <div class="vinfo" id="win-vinfo">加载中…</div>
+        <div class="notes" id="win-notes"></div>
+        <a class="btn-dl disabled" id="win-btn" href="#">暂无下载</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><span class="ic"></span>公告</h2>
+    <div id="ann-list"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="foot">
+    闲鱼AI助手 &copy; 2026 · 仅供合规电商运营使用<br>
+    下载即表示同意：采集与上架请遵守各平台规则与相关法律法规。
+  </div>
+</div>
+
+<script>
+  function fmtSize(b){ if(!b) return ""; const u=["B","KB","MB","GB"]; let i=0,n=b; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(n>=10||i===0?0:1)+u[i]; }
+  function fmtDate(s){ if(!s) return ""; const d=new Date(s); if(isNaN(d)) return ""; const z=new Date(d.getTime()+8*3600*1000); const p=x=>String(x).padStart(2,"0"); return z.getFullYear()+"-"+p(z.getMonth()+1)+"-"+p(z.getDate()); }
+  function detectOS(){ const ua=navigator.userAgent||navigator.platform||""; if(/Mac|iPhone|iPad|iPod/i.test(ua)) return "mac"; if(/Win/i.test(ua)) return "win"; return ""; }
+
+  function fillCard(plat, v){
+    const vinfo=document.getElementById(plat+"-vinfo");
+    const notes=document.getElementById(plat+"-notes");
+    const btn=document.getElementById(plat+"-btn");
+    if(!v){ vinfo.textContent="暂无可用版本"; btn.textContent="暂无下载"; btn.classList.add("disabled"); return; }
+    const sz=v.file_size?(" · "+fmtSize(v.file_size)):"";
+    vinfo.textContent="最新版本 v"+v.version+sz+(v.created_at?(" · "+fmtDate(v.created_at)):"");
+    notes.textContent=v.release_notes||"";
+    if(v.download_url){ btn.href=v.download_url; btn.textContent="下载 v"+v.version; btn.classList.remove("disabled"); btn.setAttribute("download",""); }
+    else { btn.textContent="暂无下载"; btn.classList.add("disabled"); }
+  }
+
+  async function loadVersions(){
+    try{
+      const r=await fetch("/api/public/versions"); const d=await r.json();
+      fillCard("mac", d.mac); fillCard("win", d.win);
+      const os=detectOS();
+      if(os==="mac") document.getElementById("card-mac").classList.add("rec");
+      if(os==="win") document.getElementById("card-win").classList.add("rec");
+      if(os){ const c=document.getElementById("card-"+os); if(c){ const b=document.createElement("span"); b.className="badge"; b.textContent="推荐你的系统"; c.appendChild(b); } }
+    }catch(e){ document.getElementById("mac-vinfo").textContent="加载失败"; document.getElementById("win-vinfo").textContent="加载失败"; }
+  }
+
+  async function loadAnnouncements(){
+    const box=document.getElementById("ann-list");
+    try{
+      const r=await fetch("/api/public/announcements"); const list=await r.json();
+      if(!list||!list.length){ box.innerHTML='<div class="empty">暂无公告</div>'; return; }
+      box.innerHTML=list.map(a=>`
+        <div class="ann-item">
+          <div class="t">${a.pinned>0?'<span class="pin">置顶</span>':''}${escapeHtml(a.title)}</div>
+          ${a.content?`<div class="c">${escapeHtml(a.content)}</div>`:''}
+          <div class="d">${fmtDate(a.created_at)}</div>
+        </div>`).join("");
+    }catch(e){ box.innerHTML='<div class="empty">公告加载失败</div>'; }
+  }
+
+  function escapeHtml(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+  loadVersions(); loadAnnouncements();
+</script>
+</body>
+</html>

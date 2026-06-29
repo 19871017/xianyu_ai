@@ -24,7 +24,7 @@ fi
 echo "✅ python3: $(python3 --version)"
 
 echo "[2/8] 安装依赖..."
-pip3 install -q fastapi uvicorn[standard] sqlalchemy pydantic python-jose[cryptography] bcrypt cryptography 2>&1 | tail -3
+pip3 install -q fastapi uvicorn[standard] sqlalchemy pydantic python-jose[cryptography] bcrypt cryptography python-multipart 2>&1 | tail -3
 
 echo "[3/8] 备份旧代码..."
 if [ -d "$DEPLOY_DIR" ]; then
@@ -37,7 +37,7 @@ fi
 
 echo "[4/8] 部署新代码..."
 # 创建目录结构
-mkdir -p "$DEPLOY_DIR"/{models,schemas,services,routers,utils,admin_frontend/static,keys,data}
+mkdir -p "$DEPLOY_DIR"/{models,schemas,services,routers,utils,admin_frontend/static,site_frontend,downloads,keys,data}
 
 # 复制所有Python文件
 cp "$SOURCE_DIR"/config.py "$DEPLOY_DIR/"
@@ -49,6 +49,7 @@ cp "$SOURCE_DIR"/services/*.py "$DEPLOY_DIR/services/"
 cp "$SOURCE_DIR"/routers/*.py "$DEPLOY_DIR/routers/"
 cp "$SOURCE_DIR"/utils/*.py "$DEPLOY_DIR/utils/"
 cp "$SOURCE_DIR"/admin_frontend/index.html "$DEPLOY_DIR/admin_frontend/"
+cp "$SOURCE_DIR"/site_frontend/index.html "$DEPLOY_DIR/site_frontend/"
 
 # 保留旧的RSA密钥和数据库
 if [ -f "$BACKUP_DIR/keys/private_key.pem" ]; then
@@ -59,6 +60,11 @@ fi
 if [ -f "$BACKUP_DIR/data/xf_server.db" ]; then
     cp "$BACKUP_DIR/data/xf_server.db" "$DEPLOY_DIR/data/"
     echo "✅ 保留数据库"
+fi
+# 保留用户上传的安装包（downloads 目录），升级不丢历史版本文件。
+if [ -d "$BACKUP_DIR/downloads" ]; then
+    cp -r "$BACKUP_DIR/downloads/." "$DEPLOY_DIR/downloads/" 2>/dev/null || true
+    echo "✅ 保留安装包(downloads)"
 fi
 
 echo "[5/8] 数据库迁移..."
