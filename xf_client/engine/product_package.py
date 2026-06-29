@@ -225,6 +225,47 @@ def _infer_source_platform(url: str) -> str:
     return ""
 
 
+# 规格值按分隔符断词时可断开的字符（避免「12pro max (6」「淡蓝细条纹+蓝」这类半截）。
+_SPEC_BREAK_CHARS = set(" +＋/、,，()（）-_|")
+
+
+def _boundary_truncate(text: str, max_len: int) -> str:
+    """在不超过 max_len 的前提下，优先在分隔符处断词截断。
+
+    找不到合适断点（开头就没有分隔符）时回退为硬截断。返回值不超过 max_len。
+    """
+    if len(text) <= max_len:
+        return text
+    head = text[:max_len]
+    cut = -1
+    for i, ch in enumerate(head):
+        if ch in _SPEC_BREAK_CHARS:
+            cut = i
+    if cut >= 2:  # 断点太靠前（剩不到 2 字）就不值当，回退硬截断
+        trimmed = head[:cut].rstrip(" +＋/、,，()（）-_|")
+        if trimmed:
+            return trimmed
+    return head
+
+
+def _truncate_axis_values(full_values: list[str], max_len: int) -> dict[str, str]:
+    """为某规格轴的一组完整值计算「完整值→闲鱼展示值」映射。
+
+    优先用边界截断（断词更干净），但仅当边界截断保留的不同展示值数量不少于
+    硬截断时才采用；否则整轴回退硬截断，确保不会比硬截断合并掉更多不同规格
+    （避免两个不同款被截成同名而丢失）。
+    """
+    distinct = []
+    for v in full_values:
+        if v not in distinct:
+            distinct.append(v)
+    hard = {v: v[:max_len] for v in distinct}
+    boundary = {v: _boundary_truncate(v, max_len) for v in distinct}
+    if len(set(boundary.values())) >= len(set(hard.values())):
+        return boundary
+    return hard
+
+
 def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
     sku_list = item.get("sku_list") or item.get("skus") or []
     if isinstance(sku_list, str):
@@ -240,11 +281,11 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
     )
     base_stock = item.get("stock") or item.get("inventory") or DEFAULT_STOCK
 
-    normalized: list[dict[str, Any]] = []
-    for idx, sku in enumerate(sku_list):
+    # 第一遍：收集每个 SKU 的完整规格值（清洗但不截断），用于按轴统一计算展示值。
+    rows: list[dict[str, Any]] = []
+    for sku in sku_list:
         if not isinstance(sku, dict):
             continue
-        # 完整原始规格（清洗但不按闲鱼上限截断），用于 source_spec 回上游下单匹配。
         spec1_full = _clean_text(
             sku.get("spec1")
             or sku.get("规格1")
@@ -256,9 +297,21 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
             or "默认"
         , 120)
         spec2_full = _clean_text(sku.get("spec2") or sku.get("规格2") or sku.get("sub_spec") or "", 120)
-        # spec1/spec2 是闲鱼实际展示的规格值，按闲鱼「最大 12 字」规整。
-        spec1 = spec1_full[:XIANYU_SPEC_VALUE_MAXLEN]
-        spec2 = spec2_full[:XIANYU_SPEC_VALUE_MAXLEN]
+        rows.append({"sku": sku, "spec1_full": spec1_full, "spec2_full": spec2_full})
+
+    # 按轴统一计算「完整值→闲鱼展示值」映射（碰撞感知，避免半截或不同款撞名）。
+    spec1_map = _truncate_axis_values([r["spec1_full"] for r in rows], XIANYU_SPEC_VALUE_MAXLEN)
+    spec2_map = _truncate_axis_values(
+        [r["spec2_full"] for r in rows if r["spec2_full"]], XIANYU_SPEC_VALUE_MAXLEN
+    )
+
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        sku = row["sku"]
+        spec1_full = row["spec1_full"]
+        spec2_full = row["spec2_full"]
+        spec1 = spec1_map.get(spec1_full, spec1_full[:XIANYU_SPEC_VALUE_MAXLEN])
+        spec2 = spec2_map.get(spec2_full, spec2_full[:XIANYU_SPEC_VALUE_MAXLEN]) if spec2_full else ""
         price = _as_float(sku.get("price") or sku.get("价格") or sku.get("group_price") or base_price)
         # 库存可能为合法的 0（售罄/缺货），不能用 or 兜底，否则会被错误重置。
         stock = base_stock
@@ -332,7 +385,6 @@ def normalize_sku_list(item: dict[str, Any]) -> list[dict[str, Any]]:
         })
 
     return normalized
-
 
 def ensure_full_product_package(item: dict[str, Any]) -> dict[str, Any]:
     """补齐并统一完整商品包字段。"""
