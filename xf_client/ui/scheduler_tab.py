@@ -68,13 +68,17 @@ class TaskRunWorker(QThread):
 
     def _run_recheck(self, log):
         from engine.source_recheck import RecheckEngine
+        # 定时复检聚焦「已上架」商品：防止卖出后源头涨价/售罄/下架造成
+        # 亏损或缺货。全量复检（含未上架/拼多多风控）太重，不在定时任务里跑。
+        listed = ("listed_xianyu", "listed_goofishpro")
         products = [
             p for p in db.get_all_products()
             if (p.get("source_url") or "").strip()
             and (p.get("source_platform") or p.get("platform")) in ("1688", "taobao", "jd", "pdd")
+            and (p.get("status") or "") in listed
         ]
         if not products:
-            return True, "无可复检商品（跳过）"
+            return True, "无已上架商品可复检（跳过）"
         engine = RecheckEngine(on_log=log)
 
         def on_item(done, total, row):
