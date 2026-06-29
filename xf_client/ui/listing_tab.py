@@ -75,7 +75,7 @@ class ListingWorker(QThread):
 
     def __init__(self, items, price_mode, price_value,
                  stock=1, condition="全新", dry_run=True, channel="xianyu",
-                 split_specs=False):
+                 split_specs=False, ai_rewrite=False):
         super().__init__()
         self.items = items
         self.channel = channel
@@ -87,6 +87,9 @@ class ListingWorker(QThread):
         # 按主规格拆单：双规格轴商品拆成多个单轴子商品后逐个发布，
         # 避免笛卡尔积空缺组合在闲鱼前台显示「无货」规格。
         self.split_specs = split_specs
+        # 上架前用 AI 改写文案（全新现货口吻、去堆砌/emoji）。失败则回退原文案，不阻断发布。
+        self.ai_rewrite = ai_rewrite
+        self._ai_writer = None
         self.results = []
 
     def _final_price(self, item) -> float:
@@ -104,6 +107,49 @@ class ListingWorker(QThread):
             return round(max(0.01, base * (1 - self.price_value / 100)), 2) if base else 0.0
         # fixed
         return round(self.price_value, 2) if self.price_value > 0 else base
+
+    def _apply_ai_rewrite(self, item: dict, on_progress) -> None:
+        """上架前用 AI 改写文案，原地写回 item 的 title/description/tags。
+
+        失败（未配置/网络/解析错误）不阻断发布，保留原文案并提示。
+        改写结果同时写回 ai_title/ai_description 便于追溯，并落库（有 db_id 时）。
+        """
+        try:
+            from engine.ai_writer import AIWriter
+            if self._ai_writer is None:
+                self._ai_writer = AIWriter()
+            writer = self._ai_writer
+            if not writer._is_configured():
+                on_progress("  ⚠ 未配置 AI API，跳过文案优化（用原文案发布）。")
+                return
+            title = item.get("title") or item.get("original_title") or ""
+            desc = item.get("description") or ""
+            price = item.get("new_price") or item.get("price") or item.get("original_price") or ""
+            res = writer.rewrite(title, desc, str(price))
+            if not res.get("success"):
+                on_progress(f"  ⚠ 文案优化失败（{res.get('error','')[:40]}），用原文案发布。")
+                return
+            if not item.get("original_description"):
+                item["original_description"] = desc
+            new_title = res.get("title") or title
+            new_desc = res.get("description") or desc
+            new_tags = res.get("tags") or []
+            item["ai_title"] = new_title
+            item["ai_description"] = new_desc
+            item["ai_tags"] = new_tags
+            item["title"] = new_title
+            if new_desc:
+                item["description"] = new_desc
+            if new_tags:
+                item["tags"] = new_tags
+            on_progress(f"  ✎ 文案已优化：{new_title[:24]}")
+            if not self.dry_run and item.get("db_id"):
+                try:
+                    db.save_product(item)
+                except Exception:
+                    pass
+        except Exception as e:
+            on_progress(f"  ⚠ 文案优化异常（{str(e)[:40]}），用原文案发布。")
 
     def run(self):
         def on_progress(msg):
@@ -125,6 +171,9 @@ class ListingWorker(QThread):
 
             supports_multi = ch.get("supports_multi_sku", True)
             for i, item in enumerate(self.items):
+                # 上架前 AI 改写文案（在拆单前做，改写后的标题会传到各子商品）。
+                if self.ai_rewrite:
+                    self._apply_ai_rewrite(item, on_progress)
                 # 拆单：仅在所选渠道支持多规格、且开启拆单时，对双轴商品生效。
                 units = [item]
                 if self.split_specs and supports_multi:
@@ -367,6 +416,17 @@ class ListingTab(QWidget):
             "代价：一个商品会发布成多个独立商品。"
         )
         row2.addWidget(self.split_cb)
+        row2.addSpacing(16)
+
+        self.ai_rewrite_cb = QCheckBox("上架前 AI 优化文案（全新现货口吻）")
+        self.ai_rewrite_cb.setChecked(False)
+        self.ai_rewrite_cb.setToolTip(
+            "勾选后：发布前对每个商品调用 AI 改写标题/描述（全新现货口吻、去关键词堆砌、"
+            "去 emoji），结果落库并用于上架。\n"
+            "需先在设置页配置 AI API；失败时自动回退原文案，不阻断发布。\n"
+            "代价：每个商品多一次 AI 调用，发布耗时增加。"
+        )
+        row2.addWidget(self.ai_rewrite_cb)
         row2.addStretch()
         layout.addLayout(row2)
 
@@ -638,6 +698,7 @@ class ListingTab(QWidget):
             selected, price_mode, price_value,
             stock=stock, condition=condition, dry_run=dry_run, channel=channel,
             split_specs=self.split_cb.isChecked(),
+            ai_rewrite=self.ai_rewrite_cb.isChecked(),
         )
         self.worker.progress_msg.connect(self._on_list_progress)
         self.worker.item_done.connect(self._on_item_done)
