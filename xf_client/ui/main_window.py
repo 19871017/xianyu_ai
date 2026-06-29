@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, QTimer
 import time
 from PyQt6.QtGui import QIcon, QFont
 
+from ui.dashboard_tab import DashboardTab
 from ui.collect_tab import CollectTab
 from ui.copywriting_tab import CopywritingTab
 from ui.listing_tab import ListingTab
@@ -77,6 +78,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setFont(QFont(GLOBAL_FONT_FAMILY, 12))
 
+        self.dashboard_tab = DashboardTab(self)
         self.collect_tab = CollectTab(self)
         self.copywriting_tab = CopywritingTab(self)
         self.listing_tab = ListingTab(self)
@@ -85,6 +87,7 @@ class MainWindow(QMainWindow):
         self.recheck_tab = RecheckTab(self)
         self.settings_tab = SettingsTab(self)
 
+        self.tabs.addTab(self.dashboard_tab,    "📊 概览")
         self.tabs.addTab(self.collect_tab,      "🔍 采集")
         self.tabs.addTab(self.copywriting_tab,  "✍️ 文案优化")
         self.tabs.addTab(self.listing_tab,      "📦 上架闲鱼")
@@ -116,10 +119,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_all_tabs(self):
         """刷新所有Tab的数据"""
+        self.dashboard_tab.refresh_items(self.collected_items)
         self.copywriting_tab.refresh_items(self.collected_items)
         self.listing_tab.refresh_items(self.collected_items)
         self.export_tab.refresh_items(self.collected_items)
         self.order_tab.refresh_items(self.collected_items)
+        self.dashboard_tab.refresh_items(self.collected_items)
 
     def is_licensed(self, force: bool = False) -> bool:
         """检查是否已激活（带短期缓存，避免每次点击都打网络）。"""
