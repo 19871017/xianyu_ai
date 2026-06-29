@@ -131,6 +131,24 @@ class DatabaseManager:
                     error TEXT DEFAULT ''
                 )
             """)
+            # ── 源商品复检结果表 ──
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS source_rechecks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_id INTEGER,
+                    title TEXT,
+                    platform TEXT,
+                    source_url TEXT,
+                    listing_price REAL DEFAULT 0,
+                    old_min_price REAL DEFAULT 0,
+                    new_min_price REAL DEFAULT 0,
+                    level TEXT DEFAULT 'none',
+                    summary TEXT DEFAULT '',
+                    alerts TEXT DEFAULT '[]',
+                    checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # 给老数据库做 migration（字段不存在时 ALTER）
             self._migrate_monitor_table(conn)
             self._migrate_trace_columns(conn)
@@ -537,6 +555,67 @@ class DatabaseManager:
     def delete_cookie(self, platform: str):
         with self._get_conn() as conn:
             conn.execute("DELETE FROM cookies WHERE platform = ?", (platform,))
+
+    # ═══════════════════ 源商品复检 ═══════════════════
+
+    def save_recheck(self, row: Dict) -> int:
+        """保存一条源商品复检结果。row 来自 RecheckEngine.recheck_products。"""
+        import json as _json
+        with self._get_conn() as conn:
+            cur = conn.execute("""
+                INSERT INTO source_rechecks
+                    (product_id, title, platform, source_url, listing_price,
+                     old_min_price, new_min_price, level, summary, alerts, checked_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                row.get("db_id"),
+                row.get("title", ""),
+                row.get("platform", ""),
+                row.get("source_url", ""),
+                float(row.get("listing_price") or 0),
+                float(row.get("old_min_price") or 0),
+                float(row.get("new_min_price") or 0),
+                row.get("level", "none"),
+                row.get("summary", ""),
+                _json.dumps(row.get("alerts", []), ensure_ascii=False),
+                datetime.now().isoformat(),
+            ))
+            return cur.lastrowid
+
+    def get_latest_rechecks(self, only_alert: bool = False) -> List[Dict]:
+        """取每个商品最近一次复检结果。only_alert=True 仅返回有告警(level!=none)的。"""
+        import json as _json
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT r.* FROM source_rechecks r
+                JOIN (
+                    SELECT product_id, MAX(checked_at) AS mx
+                    FROM source_rechecks GROUP BY product_id
+                ) t ON r.product_id = t.product_id AND r.checked_at = t.mx
+                ORDER BY
+                    CASE r.level WHEN 'critical' THEN 3 WHEN 'warn' THEN 2
+                                 WHEN 'info' THEN 1 ELSE 0 END DESC,
+                    r.checked_at DESC
+            """).fetchall()
+            out = []
+            for row in rows:
+                d = dict(row)
+                try:
+                    d["alerts"] = _json.loads(d.get("alerts") or "[]")
+                except Exception:
+                    d["alerts"] = []
+                if only_alert and d.get("level", "none") == "none":
+                    continue
+                out.append(d)
+            return out
+
+    def clear_rechecks(self, before_days: int = 90):
+        """清理过期复检记录（默认保留 90 天）。"""
+        with self._get_conn() as conn:
+            conn.execute(
+                "DELETE FROM source_rechecks WHERE checked_at < datetime('now', ?)",
+                (f'-{int(before_days)} days',),
+            )
 
 
 # 全局数据库实例

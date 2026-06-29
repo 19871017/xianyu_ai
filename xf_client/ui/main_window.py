@@ -13,6 +13,7 @@ from ui.copywriting_tab import CopywritingTab
 from ui.listing_tab import ListingTab
 from ui.export_tab import ExportTab
 from ui.order_tab import OrderTab
+from ui.recheck_tab import RecheckTab
 from ui.settings_tab import SettingsTab
 from license.license_validator import LicenseValidator
 from database.db_manager import db
@@ -81,6 +82,7 @@ class MainWindow(QMainWindow):
         self.listing_tab = ListingTab(self)
         self.export_tab = ExportTab(self)
         self.order_tab = OrderTab(self)
+        self.recheck_tab = RecheckTab(self)
         self.settings_tab = SettingsTab(self)
 
         self.tabs.addTab(self.collect_tab,      "🔍 采集")
@@ -88,6 +90,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.listing_tab,      "📦 上架闲鱼")
         self.tabs.addTab(self.export_tab,       "📊 导出")
         self.tabs.addTab(self.order_tab,        "🛒 订单代采")
+        self.tabs.addTab(self.recheck_tab,      "🛡 源复检")
         self.tabs.addTab(self.settings_tab,     "⚙️ 设置")
 
         layout.addWidget(self.tabs)
