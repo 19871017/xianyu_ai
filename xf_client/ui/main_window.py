@@ -15,6 +15,7 @@ from ui.listing_tab import ListingTab
 from ui.export_tab import ExportTab
 from ui.order_tab import OrderTab
 from ui.recheck_tab import RecheckTab
+from ui.profit_tab import ProfitTab
 from ui.scheduler_tab import SchedulerTab
 from ui.settings_tab import SettingsTab
 from license.license_validator import LicenseValidator
@@ -86,6 +87,7 @@ class MainWindow(QMainWindow):
         self.export_tab = ExportTab(self)
         self.order_tab = OrderTab(self)
         self.recheck_tab = RecheckTab(self)
+        self.profit_tab = ProfitTab(self)
         self.scheduler_tab = SchedulerTab(self)
         self.settings_tab = SettingsTab(self)
 
@@ -96,6 +98,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.export_tab,       "📊 导出")
         self.tabs.addTab(self.order_tab,        "🛒 订单代采")
         self.tabs.addTab(self.recheck_tab,      "🛡 源复检")
+        self.tabs.addTab(self.profit_tab,       "💰 选品打分")
         self.tabs.addTab(self.scheduler_tab,    "⏰ 定时调度")
         self.tabs.addTab(self.settings_tab,     "⚙️ 设置")
 
@@ -132,6 +135,7 @@ class MainWindow(QMainWindow):
         self.listing_tab.refresh_items(self.collected_items)
         self.export_tab.refresh_items(self.collected_items)
         self.order_tab.refresh_items(self.collected_items)
+        self.profit_tab.refresh_items(self.collected_items)
         self.dashboard_tab.refresh_items(self.collected_items)
 
     def is_licensed(self, force: bool = False) -> bool:
