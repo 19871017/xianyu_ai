@@ -95,5 +95,33 @@ class TestSpecAxisNames(unittest.TestCase):
         self.assertEqual(XianyuLister._spec_axis_names([]), ("", ""))
 
 
+class TestSpecTypeExclude(unittest.TestCase):
+    """exclude：避免两个规格轴推断成同一类型（闲鱼同一商品两轴不可重名）。"""
+
+    def test_excluded_mapping_falls_through(self):
+        # 「适用型号」映射本应为「颜色」，但颜色已被第一轴占用，应顺延。
+        t = XianyuLister._infer_spec_type(["17promax", "16promax"], "适用型号", exclude=("颜色",))
+        self.assertNotEqual(t, "颜色")
+        self.assertIn(t, ["尺码", "容量", "份数", "大小", "高度", "总量"])
+
+    def test_excluded_keyword_falls_through(self):
+        # 颜色值但颜色已占用：关键词反推也要避开「颜色」。
+        t = XianyuLister._infer_spec_type(["红色", "蓝色"], "", exclude=("颜色",))
+        self.assertNotEqual(t, "颜色")
+
+    def test_no_exclude_keeps_old_behavior(self):
+        # 不传 exclude 时行为不变。
+        self.assertEqual(XianyuLister._infer_spec_type(["红色", "蓝色"]), "颜色")
+        self.assertEqual(XianyuLister._infer_spec_type(["17promax"], "机型"), "颜色")
+
+    def test_first_axis_color_second_axis_not_color(self):
+        # 双轴手机壳场景：第一轴颜色，第二轴(机型)排除颜色后不重名。
+        t1 = XianyuLister._infer_spec_type(["蓝边磁吸", "粉边磁吸"], "颜色")
+        t2 = XianyuLister._infer_spec_type(["17promax", "16promax"], "适用型号", exclude=(t1,))
+        self.assertEqual(t1, "颜色")
+        self.assertNotEqual(t1, t2)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

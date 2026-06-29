@@ -371,20 +371,31 @@ class XianyuLister:
         return ""
 
     @staticmethod
-    def _infer_spec_type(values: list[str], raw_name: str = "") -> str:
+    def _infer_spec_type(values: list[str], raw_name: str = "",
+                         exclude: tuple[str, ...] | None = None) -> str:
         """推断闲鱼固定规格类型。
 
-        优先级：原始类型名映射（最权威）> 关键词反推 > 回退「颜色」。
+        优先级：原始类型名映射（最权威）> 关键词反推 > 回退首个可用项。
         关键词反推按「命中该关键词的规格值个数」打分（而非关键词累计次数），
         让「每个值都含色」的颜色轴稳胜「个别值偶含套/装」的误判。
+        exclude：已被其它规格轴占用的类型名，避免两个轴重名（闲鱼同一商品
+        两个规格轴类型不能相同）；命中映射但已被占用时顺延到下一个可用项。
         """
+        excluded = set(exclude or ())
+
+        def _first_available() -> str:
+            for name in SPEC_TYPE_OPTIONS:
+                if name not in excluded:
+                    return name
+            return SPEC_TYPE_OPTIONS[0]
+
         mapped = XianyuLister._map_spec_name(raw_name)
-        if mapped:
+        if mapped and mapped not in excluded:
             return mapped
 
         vals = [str(v or "").lower() for v in values if str(v or "").strip()]
         if not vals:
-            return SPEC_TYPE_OPTIONS[0]
+            return _first_available()
         # 每个规格值归给「命中的最长关键词」所属类型：更长的关键词更具体，
         # 让 100ml 命中 容量「ml」(2字) 而非 尺码「m」(1字)；值内平局按选项
         # 顺序（颜色优先），使「黑色套装」这类色+装并存的值稳归颜色。
@@ -392,14 +403,18 @@ class XianyuLister:
         for v in vals:
             best_name, best_len = "", 0
             for name in SPEC_TYPE_OPTIONS:
+                if name in excluded:
+                    continue
                 for kw in SPEC_TYPE_KEYWORDS.get(name, ()):
                     kw = kw.lower()
                     if kw in v and len(kw) > best_len:
                         best_name, best_len = name, len(kw)
             if best_name:
                 counts[best_name] += 1
-        best, best_score = SPEC_TYPE_OPTIONS[0], 0
+        best, best_score = _first_available(), 0
         for name in SPEC_TYPE_OPTIONS:
+            if name in excluded:
+                continue
             if counts[name] > best_score:
                 best, best_score = name, counts[name]
         return best
@@ -589,7 +604,8 @@ class XianyuLister:
         # 轴 2（可选）
         if v2:
             if self._add_spec_type_block():
-                t2 = self._infer_spec_type(v2, name2)
+                # 排除第一轴已用类型，避免两个规格轴重名（如双「颜色」）。
+                t2 = self._infer_spec_type(v2, name2, exclude=(t1,))
                 n2 = self._fill_spec_axis(1, t2, v2)
                 self.log(f"规格类型2「{t2}」填入 {n2}/{len(v2)} 个值。")
                 out["axes"] = 2
