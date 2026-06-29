@@ -15,6 +15,7 @@ from engine.jd_sku_parser import parse_jd_sku_list, extract_color_size_from_html
 from DrissionPage import Chromium
 from config import IMAGE_DIR
 from utils.helpers import ensure_dir, sanitize_filename
+from utils.image_dedup import is_valid_product_image
 from utils.browser_config import get_chromium_options, check_browser_available
 
 JD_PROFILE_DIR = os.path.join(os.path.expanduser("~"), ".xf_jd_collector_profile")
@@ -191,6 +192,8 @@ class JDCollector:
                     return None
 
             img_data = resp.content
+            if not is_valid_product_image(img_data):
+                return None
             md5 = self._md5(img_data)
             if md5 in self.seen_img_md5:
                 return None

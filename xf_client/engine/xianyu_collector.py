@@ -10,6 +10,7 @@ from config import PLATFORM_URLS, IMAGE_DIR
 
 XIANYU_BASE_URL = PLATFORM_URLS['xianyu']['home'].rstrip('/')
 from utils.helpers import ensure_dir, sanitize_filename
+from utils.image_dedup import is_valid_product_image
 from utils.browser_config import get_chromium_options, check_browser_available
 
 XIANYU_PROFILE_DIR = os.path.join(os.path.expanduser("~"), ".xf_xianyu_collector_profile")
@@ -179,6 +180,8 @@ class XianyuCollector:
                     return None
 
             img_data = resp.content
+            if not is_valid_product_image(img_data):
+                return None
             md5 = self._md5(img_data)
             if md5 in self.seen_img_md5:
                 return None

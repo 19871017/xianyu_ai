@@ -37,6 +37,7 @@ import requests as _requests
 from DrissionPage import Chromium
 from config import IMAGE_DIR
 from utils.helpers import ensure_dir, sanitize_filename
+from utils.image_dedup import is_valid_product_image
 from utils.browser_config import get_chromium_options, check_browser_available
 from engine.product_package import download_product_image_groups
 from engine.pdd_full_package import enrich_pdd_product
@@ -380,6 +381,8 @@ class PddCollector:
                 return None
 
             img_data = resp.content
+            if not is_valid_product_image(img_data):
+                return None
             md5 = self._md5(img_data)
             if md5 in self.seen_img_md5:
                 return None
