@@ -87,5 +87,34 @@ class TestProductPersist(unittest.TestCase):
         self.assertEqual(reloaded.get("status"), "listed_xianyu")
 
 
+    def test_edit_dialog_flow_persists(self):
+        # 端到端：模拟编辑弹窗提交路径 apply_product_edits -> save_product -> 重载。
+        from engine.product_package import apply_product_edits
+        item = self._make_item()
+        self.db.save_product(item)
+        loaded = self.db.get_all_products()[0]
+
+        edits = {
+            "title": "旗舰耳机 黑白双色",
+            "description": "全新正品，多规格可选。",
+            "new_price": "29.9",
+            "sku_edits": [{"index": 0, "price": "21.5", "stock": "7"}],
+        }
+        edited = apply_product_edits(loaded, edits)
+        for key in ("db_id", "item_id", "status", "platform"):
+            if key not in edited and key in loaded:
+                edited[key] = loaded[key]
+        self.db.save_product(edited)
+
+        reloaded = self.db.get_all_products()[0]
+        self.assertEqual(reloaded.get("title"), "旗舰耳机 黑白双色")
+        self.assertEqual(reloaded.get("description"), "全新正品，多规格可选。")
+        self.assertEqual(str(reloaded.get("new_price")), "29.9")
+        prices = {round(float(s["price"]), 2) for s in reloaded["sku_list"]}
+        self.assertIn(21.5, prices)
+        sku0 = next(s for s in reloaded["sku_list"] if round(float(s["price"]), 2) == 21.5)
+        self.assertEqual(int(sku0.get("stock")), 7)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
