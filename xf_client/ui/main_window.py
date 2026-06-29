@@ -15,6 +15,7 @@ from ui.listing_tab import ListingTab
 from ui.export_tab import ExportTab
 from ui.order_tab import OrderTab
 from ui.recheck_tab import RecheckTab
+from ui.scheduler_tab import SchedulerTab
 from ui.settings_tab import SettingsTab
 from license.license_validator import LicenseValidator
 from database.db_manager import db
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
         self.export_tab = ExportTab(self)
         self.order_tab = OrderTab(self)
         self.recheck_tab = RecheckTab(self)
+        self.scheduler_tab = SchedulerTab(self)
         self.settings_tab = SettingsTab(self)
 
         self.tabs.addTab(self.dashboard_tab,    "📊 概览")
@@ -94,6 +96,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.export_tab,       "📊 导出")
         self.tabs.addTab(self.order_tab,        "🛒 订单代采")
         self.tabs.addTab(self.recheck_tab,      "🛡 源复检")
+        self.tabs.addTab(self.scheduler_tab,    "⏰ 定时调度")
         self.tabs.addTab(self.settings_tab,     "⚙️ 设置")
 
         layout.addWidget(self.tabs)
@@ -108,6 +111,11 @@ class MainWindow(QMainWindow):
         self._heartbeat_timer = QTimer(self)
         self._heartbeat_timer.timeout.connect(self._on_heartbeat)
         self._heartbeat_timer.start(60_000)
+
+        # 调度定时器：周期性检查到期任务并分发执行
+        self._scheduler_timer = QTimer(self)
+        self._scheduler_timer.timeout.connect(self._on_scheduler_tick)
+        self._scheduler_timer.start(60_000)
 
     def _load_products_from_db(self) -> list:
         """从数据库加载所有商品"""
@@ -203,6 +211,13 @@ class MainWindow(QMainWindow):
         self._update_status()
         # 激活/状态变更后强制刷新缓存，立即反映到 UI 与各功能门控
         self.unlicensed_label.setVisible(not self.is_licensed(force=True))
+
+    def _on_scheduler_tick(self):
+        """定时检查并执行到期的调度任务。"""
+        try:
+            self.scheduler_tab.run_due_tasks()
+        except Exception as e:
+            print(f"调度执行异常: {e}")
 
     def _on_heartbeat(self):
         """定时心跳：服务端指示下线时立即失效并提示。"""

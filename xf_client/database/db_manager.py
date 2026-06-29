@@ -149,6 +149,23 @@ class DatabaseManager:
                 )
             """)
 
+            # ── 定时任务表 ──
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    task_type TEXT,
+                    trigger TEXT DEFAULT 'interval',
+                    interval_minutes INTEGER DEFAULT 60,
+                    daily_time TEXT DEFAULT '09:00',
+                    params TEXT DEFAULT '{}',
+                    enabled INTEGER DEFAULT 1,
+                    last_run TIMESTAMP,
+                    last_result TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # 给老数据库做 migration（字段不存在时 ALTER）
             self._migrate_monitor_table(conn)
             self._migrate_trace_columns(conn)
@@ -555,6 +572,84 @@ class DatabaseManager:
     def delete_cookie(self, platform: str):
         with self._get_conn() as conn:
             conn.execute("DELETE FROM cookies WHERE platform = ?", (platform,))
+
+    # ═══════════════════ 定时任务调度 ═══════════════════
+
+    def save_scheduled_task(self, task: Dict) -> int:
+        """新增或更新一条定时任务。含 id 则更新，否则新增。"""
+        import json as _json
+        params_json = _json.dumps(task.get("params", {}), ensure_ascii=False)
+        with self._get_conn() as conn:
+            if task.get("id"):
+                conn.execute("""
+                    UPDATE scheduled_tasks SET
+                        name = ?, task_type = ?, trigger = ?,
+                        interval_minutes = ?, daily_time = ?, params = ?,
+                        enabled = ?
+                    WHERE id = ?
+                """, (
+                    task.get("name", ""),
+                    task.get("task_type", ""),
+                    task.get("trigger", "interval"),
+                    int(task.get("interval_minutes") or 60),
+                    task.get("daily_time", "09:00"),
+                    params_json,
+                    1 if task.get("enabled", True) else 0,
+                    task["id"],
+                ))
+                return task["id"]
+            cur = conn.execute("""
+                INSERT INTO scheduled_tasks
+                    (name, task_type, trigger, interval_minutes, daily_time,
+                     params, enabled)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                task.get("name", ""),
+                task.get("task_type", ""),
+                task.get("trigger", "interval"),
+                int(task.get("interval_minutes") or 60),
+                task.get("daily_time", "09:00"),
+                params_json,
+                1 if task.get("enabled", True) else 0,
+            ))
+            return cur.lastrowid
+
+    def get_scheduled_tasks(self) -> List[Dict]:
+        """取全部定时任务（含 params 反序列化、enabled 转 bool）。"""
+        import json as _json
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM scheduled_tasks ORDER BY id"
+            ).fetchall()
+            out = []
+            for row in rows:
+                d = dict(row)
+                try:
+                    d["params"] = _json.loads(d.get("params") or "{}")
+                except Exception:
+                    d["params"] = {}
+                d["enabled"] = bool(d.get("enabled"))
+                out.append(d)
+            return out
+
+    def set_task_enabled(self, task_id: int, enabled: bool):
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE scheduled_tasks SET enabled = ? WHERE id = ?",
+                (1 if enabled else 0, task_id),
+            )
+
+    def mark_task_run(self, task_id: int, result: str = ""):
+        """标记任务已运行：更新 last_run 与 last_result。"""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE scheduled_tasks SET last_run = ?, last_result = ? WHERE id = ?",
+                (datetime.now().isoformat(), str(result)[:500], task_id),
+            )
+
+    def delete_scheduled_task(self, task_id: int):
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
 
     # ═══════════════════ 源商品复检 ═══════════════════
 
