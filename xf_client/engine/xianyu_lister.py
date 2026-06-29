@@ -39,18 +39,48 @@ XIANYU_UPLOAD_EXTS = (".jpg", ".jpeg", ".png")
 _IMG_CONVERT_CACHE_DIR = os.path.join(tempfile.gettempdir(), "xianyu_img_jpg")
 
 
+def _sniff_image_kind(path: str) -> str:
+    """按文件头（魔数）嗅探真实图片类型，不信扩展名。
+
+    返回 jpeg/png/webp/gif/bmp/heic 之一；非位图（SVG/XML/文本/未知）返回空串。
+    闲鱼按真实内容校验，曾遇到扩展名是 .jpg 实为 SVG 的文件被拒
+    （报「文件类型无法确定-FileHead:3C73766720786D6C」即 <svg xml）。
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16)
+    except Exception:
+        return ""
+    if head[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "webp"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if head[:2] == b"BM":
+        return "bmp"
+    if head[4:8] == b"ftyp":
+        return "heic"
+    return ""
+
+
 def to_uploadable_image(path: str) -> str | None:
     """把本地图片转成闲鱼可上传格式（jpg），返回可上传路径。
 
-    闲鱼发布页只接受 jpg/jpeg/png，webp/heic 会报「不支持的图片类型」。
-    - 已是安全格式：原样返回。
-    - webp/heic 等：用 Pillow 转 jpg 缓存（按源路径+mtime+size 去重）后返回新路径。
-    - 文件不存在 / 缺 Pillow / 转码失败：返回 None（调用方跳过）。
+    闲鱼按真实文件内容校验，只接受 jpg/jpeg/png 位图：
+    - 真实内容已是 jpg/png 且扩展名安全：原样返回。
+    - webp/heic/gif/bmp 或扩展名与内容不符（如 .jpg 实为 webp）：用 Pillow 转 jpg。
+    - 非位图（SVG/XML/文本/未知）/ 文件不存在 / 缺 Pillow / 转码失败：返回 None（调用方跳过）。
     """
     if not path or not os.path.isfile(path):
         return None
+    kind = _sniff_image_kind(path)
+    if not kind:
+        return None  # 非位图（如伪装成 .jpg 的 SVG），闲鱼会拒，直接跳过
     ext = os.path.splitext(path)[1].lower()
-    if ext in XIANYU_UPLOAD_EXTS:
+    if kind in ("jpeg", "png") and ext in XIANYU_UPLOAD_EXTS:
         return path
     try:
         from PIL import Image

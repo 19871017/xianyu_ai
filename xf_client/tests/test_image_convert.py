@@ -54,6 +54,31 @@ class TestToUploadableImage(unittest.TestCase):
         self.assertIn(".jpg", XIANYU_UPLOAD_EXTS)
         self.assertNotIn(".webp", XIANYU_UPLOAD_EXTS)
 
+    def test_svg_disguised_as_jpg_skipped(self):
+        # 扩展名是 .jpg 但内容其实是 SVG（闲鱼按真实文件头校验会拒），应跳过返回 None。
+        p = os.path.join(self.tmpdir, "icon.jpg")
+        with open(p, "wb") as f:
+            f.write(b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>')
+        self.assertIsNone(to_uploadable_image(p))
+
+    def test_text_disguised_as_png_skipped(self):
+        # 任意非位图文本伪装成图片，应跳过返回 None。
+        p = os.path.join(self.tmpdir, "fake.png")
+        with open(p, "wb") as f:
+            f.write(b"not an image at all")
+        self.assertIsNone(to_uploadable_image(p))
+
+    def test_webp_content_with_jpg_ext_converted(self):
+        # 内容是 webp 但扩展名写成 .jpg：按真实内容转码，而非原样返回。
+        from PIL import Image
+        p = os.path.join(self.tmpdir, "mislabeled.jpg")
+        Image.new("RGB", (32, 32), (10, 20, 30)).save(p, "WEBP")
+        out = to_uploadable_image(p)
+        self.assertIsNotNone(out)
+        self.assertNotEqual(out, p)
+        with Image.open(out) as img:
+            self.assertEqual(img.format, "JPEG")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
