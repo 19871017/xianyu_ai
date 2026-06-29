@@ -33,6 +33,7 @@ from engine.goofishpro_lister import GoofishProLister
 from engine.xianyu_lister import XianyuLister
 from engine.price_manager import PriceManager
 from engine.product_package import ensure_full_product_package, import_product_package
+from engine.spec_splitter import split_by_primary_spec, count_cartesian_gaps
 from database.db_manager import db
 from ui.product_edit_dialog import ProductEditDialog
 
@@ -73,7 +74,8 @@ class ListingWorker(QThread):
     finished = pyqtSignal(list)              # results list
 
     def __init__(self, items, price_mode, price_value,
-                 stock=1, condition="全新", dry_run=True, channel="xianyu"):
+                 stock=1, condition="全新", dry_run=True, channel="xianyu",
+                 split_specs=False):
         super().__init__()
         self.items = items
         self.channel = channel
@@ -82,6 +84,9 @@ class ListingWorker(QThread):
         self.stock = stock
         self.condition = condition
         self.dry_run = dry_run
+        # 按主规格拆单：双规格轴商品拆成多个单轴子商品后逐个发布，
+        # 避免笛卡尔积空缺组合在闲鱼前台显示「无货」规格。
+        self.split_specs = split_specs
         self.results = []
 
     def _final_price(self, item) -> float:
@@ -118,28 +123,62 @@ class ListingWorker(QThread):
                 self.finished.emit([])
                 return
 
+            supports_multi = ch.get("supports_multi_sku", True)
             for i, item in enumerate(self.items):
-                # 统一补齐为上架格式
-                pkg = ensure_full_product_package(dict(item))
-                price = self._final_price(item)
-                pkg["price"] = price
-                pkg["stock"] = pkg.get("stock") or self.stock
-                pkg["condition"] = self.condition
+                # 拆单：仅在所选渠道支持多规格、且开启拆单时，对双轴商品生效。
+                units = [item]
+                if self.split_specs and supports_multi:
+                    base_pkg = ensure_full_product_package(dict(item))
+                    children = split_by_primary_spec(base_pkg)
+                    if len(children) > 1:
+                        units = children
+                        on_progress(
+                            f"  ↳ 「{(item.get('title') or '')[:20]}」按主规格拆为 "
+                            f"{len(children)} 个单规格子商品发布。"
+                        )
 
-                title = pkg.get("title") or pkg.get("original_title") or ""
-                on_progress(f"[{i + 1}/{len(self.items)}] 上架到{ch_name}: {title[:30]}...")
+                title0 = item.get("title") or item.get("original_title") or ""
+                on_progress(f"[{i + 1}/{len(self.items)}] 上架到{ch_name}: {title0[:30]}...")
 
+                sub_results = []
+                sub_ok = 0
+                sub_xy_id = ""
+                last_error = ""
                 try:
-                    result = lister.fill_product(pkg, dry_run=self.dry_run)
-                    success = result.get("ok", False)
-                    error = result.get("error", "")
-                    self.results.append({**item, "list_result": result})
+                    for j, unit in enumerate(units):
+                        pkg = ensure_full_product_package(dict(unit))
+                        price = self._final_price(unit)
+                        pkg["price"] = price
+                        pkg["stock"] = pkg.get("stock") or self.stock
+                        pkg["condition"] = self.condition
+                        if len(units) > 1:
+                            on_progress(
+                                f"    [{j + 1}/{len(units)}] {pkg.get('title','')[:28]}"
+                            )
+                        result = lister.fill_product(pkg, dry_run=self.dry_run)
+                        sub_results.append(result)
+                        if result.get("ok"):
+                            sub_ok += 1
+                            sub_xy_id = result.get("xianyu_item_id") or sub_xy_id
+                        else:
+                            last_error = result.get("error", "") or last_error
+
+                    success = sub_ok == len(units) and len(units) > 0
+                    error = "" if success else (last_error or f"成功 {sub_ok}/{len(units)}")
+                    self.results.append({
+                        **item,
+                        "list_result": {
+                            "ok": success, "error": error,
+                            "units": len(units), "units_ok": sub_ok,
+                            "sub_results": sub_results,
+                        },
+                    })
                     self.item_done.emit(i, success, error)
+                    # 回写父商品：全部子商品成功才标记已上架（拆单时不回写单一线上 id）。
                     if success and not self.dry_run and item.get("db_id"):
                         db.update_product_status(item["db_id"], ch["status"])
-                        xy_id = result.get("xianyu_item_id") or ""
-                        if xy_id:
-                            db.set_xianyu_item_id(item["db_id"], xy_id)
+                        if len(units) == 1 and sub_xy_id:
+                            db.set_xianyu_item_id(item["db_id"], sub_xy_id)
                 except Exception as e:
                     error_msg = str(e)
                     on_progress(f"  ✗ 上架失败: {error_msg[:80]}")
@@ -317,6 +356,17 @@ class ListingTab(QWidget):
         self.dry_run_cb = QCheckBox("仅填写不提交（dry-run，推荐）")
         self.dry_run_cb.setChecked(True)
         row2.addWidget(self.dry_run_cb)
+        row2.addSpacing(16)
+
+        self.split_cb = QCheckBox("双规格按主规格拆单发布（避免无货占位）")
+        self.split_cb.setChecked(False)
+        self.split_cb.setToolTip(
+            "勾选后：含两个规格轴的商品（如 颜色×机型）会按取值较少的轴拆成多个"
+            "单规格子商品，每个只含真实存在的规格组合。\n"
+            "好处：前台不出现「无货」占位规格、更利于按机型/款式搜索；"
+            "代价：一个商品会发布成多个独立商品。"
+        )
+        row2.addWidget(self.split_cb)
         row2.addStretch()
         layout.addLayout(row2)
 
@@ -544,12 +594,30 @@ class ListingTab(QWidget):
                     f"「闲管家·鱼小铺」。\n"
                 )
 
+        # 拆单收益提示：统计选中双规格商品的笛卡尔积空缺，说明拆单能消除多少无货占位。
+        split_info = ""
+        if self.split_cb.isChecked() and ch.get("supports_multi_sku", True):
+            split_n = 0
+            gap_total = 0
+            for it in selected:
+                g = count_cartesian_gaps(it)
+                if g.get("gaps", 0) > 0:
+                    split_n += 1
+                    gap_total += g["gaps"]
+            if split_n:
+                split_info = (
+                    f"\n🔀 已开启按主规格拆单：{split_n} 个双规格商品将拆成多个单规格"
+                    f"子商品发布，消除约 {gap_total} 个无货占位规格。\n"
+                )
+            else:
+                split_info = "\n🔀 已开启拆单：选中商品无笛卡尔积空缺，按原样发布。\n"
+
         msg = (
             f"即将上架 {len(selected)} 个商品到 {ch_name}\n\n"
             f"价格策略: {self.price_mode_combo.currentText()} {price_value}\n"
             f"成色: {condition}\n默认库存: {stock}\n"
             f"模式: {'dry-run（仅填写不提交）' if dry_run else '⚠️ 直接提交上架'}\n"
-            f"{multi_warn}\n"
+            f"{multi_warn}{split_info}\n"
             "请确认继续？"
         )
         reply = QMessageBox.question(self, "确认上架", msg)
@@ -569,6 +637,7 @@ class ListingTab(QWidget):
         self.worker = ListingWorker(
             selected, price_mode, price_value,
             stock=stock, condition=condition, dry_run=dry_run, channel=channel,
+            split_specs=self.split_cb.isChecked(),
         )
         self.worker.progress_msg.connect(self._on_list_progress)
         self.worker.item_done.connect(self._on_item_done)
