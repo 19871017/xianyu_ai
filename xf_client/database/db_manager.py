@@ -226,6 +226,19 @@ class DatabaseManager:
     # ═══════════════════ 商品操作 ═══════════════════
 
     def save_product(self, item: Dict) -> int:
+        # 用顶层最新字段(如调价后的 sku_list)重建 attributes 内的
+        # _full_product_package，避免读取时旧 package 覆盖回退（根治调价/
+        # 改文案保存后被旧值覆盖）。仅在带 sku_list 或既有 package 时触发，
+        # 不影响仅状态字段的保存；规整失败不阻断保存。
+        try:
+            from engine.product_package import ensure_full_product_package
+            _attrs = item.get("attributes")
+            if item.get("sku_list") is not None or (
+                isinstance(_attrs, dict) and PACKAGE_ATTR_KEY in _attrs
+            ):
+                item = ensure_full_product_package(dict(item))
+        except Exception:
+            pass
         with self._get_conn() as conn:
             existing = conn.execute(
                 "SELECT id FROM products WHERE item_id = ?",
