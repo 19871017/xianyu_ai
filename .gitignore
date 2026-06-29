@@ -10,6 +10,7 @@ __pycache__/
 # Build artifacts
 dist/
 build/
+build_secure_stage/
 *.spec.bak
 *.zip
 

@@ -1,0 +1,15 @@
+闲鱼AI助手 Windows 使用说明
+版本：3.2.2
+
+一、快速运行（推荐，无需打包）
+  1. 安装 Python 3.10 或 3.11（勾选 Add Python to PATH）。
+  2. 双击 run_windows.bat：首次会自动创建虚拟环境并安装依赖，随后启动软件。
+
+二、打包成 exe（可选）
+  1. 双击 build_windows.bat：自动创建环境、跑测试、用 PyInstaller 打包。
+  2. 产物在 dist\闲鱼AI助手\闲鱼AI助手.exe。
+
+三、说明
+  - 服务端地址默认 https://xy.lxd997.dpdns.org，可用环境变量 XF_SERVER_BASE_URL 覆盖。
+  - 首次启动会自动检测新版本。
+  - 如遇依赖安装慢，可自行配置国内 pip 镜像。

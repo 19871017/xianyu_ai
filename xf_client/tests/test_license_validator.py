@@ -61,14 +61,40 @@ class LicenseValidatorTest(unittest.TestCase):
         self.assertIn("强制下线", res["reason"])
 
     def test_offline_within_grace(self):
-        v = self._make({"license_key": "k", "machine_id": "MID",
+        v = self._make({"license_key": "k", "machine_id": "MID", "signature": "deadbeef",
                         "expires_at": "2999-01-01T00:00:00", "last_online_verify": int(time.time())})
-        with mock.patch.object(self.lv.requests, "get") as g:
+        with mock.patch.object(self.lv.requests, "get") as g, \
+                mock.patch.object(self.lv, "verify_license_signature", return_value=True):
             g.return_value = _Resp(0, {})
             g.side_effect = self.lv.requests.exceptions.ConnectionError()
             res = v.verify()
         self.assertTrue(res["valid"])
         self.assertEqual(res.get("source"), "offline")
+
+    def test_offline_bad_signature_rejected(self):
+        # 离线宽限内、机器码匹配、未过期，但签名无效 -> 必须判失效（防伪造本地文件）
+        v = self._make({"license_key": "k", "machine_id": "MID", "signature": "bad",
+                        "expires_at": "2999-01-01T00:00:00", "last_online_verify": int(time.time())})
+        with mock.patch.object(self.lv.requests, "get") as g, \
+                mock.patch.object(self.lv, "verify_license_signature", return_value=False):
+            g.side_effect = self.lv.requests.exceptions.ConnectionError()
+            res = v.verify()
+        self.assertFalse(res["valid"])
+        self.assertIn("签名", res["reason"])
+
+    def test_online_bad_signature_rejected(self):
+        # 服务端返回 valid:true 但签名验不过（假服务器）-> 判失效
+        v = self._make({"license_key": "k", "machine_id": "MID", "signature": "bad",
+                        "expires_at": "2999-01-01T00:00:00", "last_online_verify": int(time.time())})
+        with mock.patch.object(self.lv.requests, "get") as g, \
+                mock.patch.object(self.lv, "verify_license_signature", return_value=False):
+            g.side_effect = [
+                _Resp(200, {}),
+                _Resp(200, {"valid": True, "expires_at": "2999-01-01T00:00:00", "signature": "bad"}),
+            ]
+            res = v.verify()
+        self.assertFalse(res["valid"])
+        self.assertIn("签名", res["reason"])
 
     def test_offline_exceeds_grace(self):
         old = int(time.time()) - (10 * 24 * 3600)

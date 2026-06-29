@@ -9,6 +9,7 @@ from config import (
     LICENSE_OFFLINE_GRACE_SECONDS,
 )
 from license.machine_id import get_machine_id
+from license.signature import verify_license_signature
 
 
 class LicenseValidator:
@@ -74,6 +75,12 @@ class LicenseValidator:
             if resp.status_code == 200:
                 data = resp.json()
                 data["machine_id"] = self.machine_id
+                # 强制验签：私钥只在服务端，伪造服务器/响应无法通过
+                if not verify_license_signature(
+                    data.get("license_key", ""), self.machine_id,
+                    data.get("expires_at", ""), data.get("signature", ""),
+                ):
+                    return {"success": False, "message": "激活响应签名校验失败（服务器不可信）"}
                 data["last_online_verify"] = int(time.time())
                 self._save_local(data)
                 self.license_data = data
@@ -112,6 +119,14 @@ class LicenseValidator:
                 if resp.status_code == 200:
                     result = resp.json()
                     if result.get("valid"):
+                        # 在线通过也必须验签：假服务器返回 valid:true 但给不出有效签名
+                        exp = result.get("expires_at") or self.license_data.get("expires_at", "")
+                        sig = result.get("signature") or self.license_data.get("signature", "")
+                        if not verify_license_signature(
+                            self.license_data.get("license_key", ""),
+                            self.machine_id, exp, sig,
+                        ):
+                            return {"valid": False, "reason": "授权签名校验失败（服务器不可信）", "source": "online"}
                         # 刷新在线校验时间戳与到期时间
                         self.license_data["last_online_verify"] = int(time.time())
                         if result.get("expires_at"):
@@ -156,6 +171,13 @@ class LicenseValidator:
         if offline_for > LICENSE_OFFLINE_GRACE_SECONDS:
             hours = LICENSE_OFFLINE_GRACE_SECONDS // 3600
             return {"valid": False, "reason": f"离线超过 {hours} 小时，请联网重新校验"}
+
+        # 离线也必须验签：防止伪造本地 license 文件绕过
+        if not verify_license_signature(
+            license_key, self.machine_id, expires_at,
+            self.license_data.get("signature", ""),
+        ):
+            return {"valid": False, "reason": "本地授权签名无效，请联网重新激活"}
 
         return {"valid": True, "expires_at": expires_at, "source": "offline"}
 
