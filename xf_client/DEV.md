@@ -14,7 +14,7 @@
 | 数据导出 | openpyxl ≥ 3.1 | Excel .xlsx 格式 |
 | HTTP请求 | requests ≥ 2.31 | License验证/服务器通信 |
 | 授权系统 | RSA-2048 + JWT + 机器码 | 远程激活+本地离线验证 |
-| 服务端 | FastAPI + SQLite | 部署在 38.71.117.111:8000 |
+| 服务端 | FastAPI + SQLite | https://xy.lxd997.dpdns.org （源站 38.71.117.111:8000） |
 
 ## 目录结构
 
@@ -150,7 +150,7 @@ items = collector.collect_by_homepage("https://www.goofish.com/personal?userId=x
 
 ## 服务端部署
 
-- **服务器**：38.71.117.111:8000
+- **服务器**：https://xy.lxd997.dpdns.org （源站 38.71.117.111:8000，Cloudflare 终结 SSL）
 - **框架**：FastAPI + SQLite
 - **API端点**：
   - `GET /` — 首页（管理后台入口）

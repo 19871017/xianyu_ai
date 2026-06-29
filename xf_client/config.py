@@ -2,7 +2,7 @@
 import os
 
 # ──────────────────────── 服务端 ────────────────────────
-SERVER_BASE_URL = "http://38.71.117.111:8000"
+SERVER_BASE_URL = os.environ.get("XF_SERVER_BASE_URL", "https://xy.lxd997.dpdns.org")
 API_LICENSE_ACTIVATE = f"{SERVER_BASE_URL}/api/license/activate"
 API_LICENSE_VERIFY   = f"{SERVER_BASE_URL}/api/license/verify"
 API_AUTH_REGISTER    = f"{SERVER_BASE_URL}/api/auth/register"
