@@ -64,5 +64,38 @@ class TestInferSpecType(unittest.TestCase):
         self.assertEqual(result, "颜色")
 
 
+class TestStripEmoji(unittest.TestCase):
+    """闲鱼禁止标题/描述含 emoji，发布前清洗。"""
+
+    def test_removes_common_emoji(self):
+        out = XianyuLister._strip_emoji("全新现货🌸 磁吸支架💗 颜值在线✨")
+        self.assertNotIn("🌸", out)
+        self.assertNotIn("💗", out)
+        self.assertNotIn("✨", out)
+        self.assertIn("全新现货", out)
+        self.assertIn("磁吸支架", out)
+
+    def test_removes_flags_and_symbols(self):
+        out = XianyuLister._strip_emoji("发货快📱🚚 好评🇨🇳 价廉➡️")
+        for ch in ("📱", "🚚", "🇨", "🇳", "➡"):
+            self.assertNotIn(ch, out)
+        self.assertIn("发货快", out)
+
+    def test_keeps_cjk_and_punctuation(self):
+        text = "适配iPhone 11—17全系列（含Pro/ProMax），下单备注机型~"
+        out = XianyuLister._strip_emoji(text)
+        self.assertEqual(out, text)
+
+    def test_empty_and_none(self):
+        self.assertEqual(XianyuLister._strip_emoji(""), "")
+        self.assertEqual(XianyuLister._strip_emoji(None), "")
+
+    def test_collapses_blank_lines(self):
+        out = XianyuLister._strip_emoji("第一行✨\n\n\n\n第二行🌸")
+        self.assertNotIn("\n\n\n", out)
+        self.assertIn("第一行", out)
+        self.assertIn("第二行", out)
+
+
 if __name__ == "__main__":
     unittest.main()

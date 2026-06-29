@@ -319,6 +319,34 @@ class XianyuLister:
         """规格值归一：去首尾空白并截断到闲鱼可接受长度。"""
         return (str(value or "").strip())[:SPEC_VALUE_MAXLEN]
 
+    @staticmethod
+    def _strip_emoji(text: str) -> str:
+        """去除 emoji 与变体选择符：闲鱼发布页禁止标题/描述含 emoji。
+
+        覆盖主要 emoji 区段（表情/符号/交通/补充符号/旗帜等）与零宽/变体选择符，
+        清理后压缩多余空行，保留普通中英文标点。
+        """
+        if not text:
+            return ""
+        emoji_pattern = re.compile(
+            "[" 
+            "\U0001F300-\U0001FAFF"  # 符号/图形/补充符号/扩展A
+            "\U00002600-\U000027BF"  # 杂项符号 + dingbats
+            "\U0001F1E6-\U0001F1FF"  # 区域指示符（国旗）
+            "\U00002190-\U000021FF"  # 箭头
+            "\U00002B00-\U00002BFF"  # 杂项符号与箭头
+            "\U0000FE00-\U0000FE0F"  # 变体选择符
+            "\U0000200D"              # 零宽连接符
+            "\U000020E3"              # 组合键帽
+            "]+",
+            flags=re.UNICODE,
+        )
+        cleaned = emoji_pattern.sub("", str(text))
+        # 清掉行尾遗留空格，并把连续空行压成单空行。
+        cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
     def _collect_spec_axes(self, sku_list: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
         """从 sku_list 提取两个规格轴（去重、保序）。
 
@@ -808,8 +836,8 @@ class XianyuLister:
                 result["error"] = "闲鱼发布页未渲染（可能登录失效或页面改版）"
                 return result
 
-            title = item.get("title") or item.get("original_title") or ""
-            desc = item.get("description") or item.get("desc") or ""
+            title = self._strip_emoji(item.get("title") or item.get("original_title") or "")
+            desc = self._strip_emoji(item.get("description") or item.get("desc") or "")
             price = item.get("price") or item.get("original_price") or ""
 
             # 1) 图片（闲鱼建议先传图）
