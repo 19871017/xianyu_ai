@@ -622,23 +622,60 @@ class XianyuLister:
             key = (self._norm_spec(sku.get("spec1") or ""), self._norm_spec(sku.get("spec2") or ""))
             sku_index.setdefault(key, sku)
 
+        # 闲鱼多规格按笛卡尔积（轴1×轴2）生成所有行且不可删行，每行都强制要求
+        # 价格+库存。采集源往往只覆盖部分组合（如某色不含某机型），缺失组合若
+        # 留空会导致整单发布被「请输入价格/库存」拦截。
+        # 策略：缺失组合也填——价格用同轴1值(同色)的真实价兜底，库存填 0（无货），
+        # 使买家无法下单到源头不存在的规格，既过校验又防止超卖/无法追溯采购。
+        axis1_price: dict[str, float] = {}
+        all_prices: list[float] = []
+        for sku in sku_list:
+            pv = float(sku.get("price") or 0)
+            if pv > 0:
+                k1 = self._norm_spec(sku.get("spec1") or "")
+                axis1_price.setdefault(k1, pv)
+                all_prices.append(pv)
+        fallback_price = min(all_prices) if all_prices else 0.0
+
         filled = 0
+        real_filled = 0
+        zero_stock = 0
         for row in rows:
             key = (self._norm_spec(row.get("v1") or ""), self._norm_spec(row.get("v2") or ""))
             sku = sku_index.get(key)
             if not sku:
                 # 单轴时 v2 为空，二次尝试仅按 v1 匹配。
                 sku = sku_index.get((key[0], ""))
-            if not sku:
-                continue
-            price = sku.get("price") or 0
-            stock = sku.get("stock") or ""
-            price_str = f"{float(price):.2f}" if price else ""
-            stock_str = str(int(stock)) if str(stock).strip() else ""
-            if self._fill_sku_row(row["n"], price_str, stock_str):
-                filled += 1
+            if sku:
+                price = float(sku.get("price") or 0)
+                stock = sku.get("stock") or ""
+                price_str = f"{price:.2f}" if price else ""
+                stock_str = str(int(stock)) if str(stock).strip() else ""
+                if not price_str:
+                    # 真实组合但缺价：用同色兜底价，避免留空被拦。
+                    bp = axis1_price.get(key[0], fallback_price)
+                    price_str = f"{bp:.2f}" if bp else ""
+                if self._fill_sku_row(row["n"], price_str, stock_str):
+                    filled += 1
+                    real_filled += 1
+            else:
+                # 笛卡尔积空缺组合：兜底价 + 库存 0（无货，不可下单）。
+                bp = axis1_price.get(key[0], fallback_price)
+                if bp <= 0:
+                    continue
+                if self._fill_sku_row(row["n"], f"{bp:.2f}", "0"):
+                    filled += 1
+                    zero_stock += 1
+
         out["rows_filled"] = filled
-        out["ok"] = filled > 0
+        out["real_skus"] = real_filled
+        out["zero_stock_rows"] = zero_stock
+        out["ok"] = filled >= len(rows) and len(rows) > 0
+        if zero_stock:
+            self.log(
+                f"已为 {zero_stock} 个源端不存在的规格组合填库存 0（无货占位），"
+                f"真实可售 {real_filled} 个。"
+            )
         return out
 
     # ── 发布 ──────────────────────────────────────────────────

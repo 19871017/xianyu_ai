@@ -265,6 +265,7 @@ class DatabaseManager:
                         description=:description,
                         source_url=:source_url,
                         source_item_id=:source_item_id,
+                        xianyu_item_id=:xianyu_item_id,
                         new_price=:new_price,
                         price_markup_pct=:price_markup_pct,
                         local_images=:local_images,
