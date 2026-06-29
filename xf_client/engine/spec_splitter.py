@@ -15,6 +15,8 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import Any
 
+from engine.spec_sort import sort_skus_by_spec
+
 
 TITLE_SPEC_MAXLEN = 20  # 拼到标题里的主规格值最大长度
 
@@ -154,7 +156,8 @@ def split_by_primary_spec(
             ns["spec2"] = ""
             ns["sku_attrs"] = _secondary_attrs(sku.get("sku_attrs"), pv)
             new_skus.append(ns)
-        child["sku_list"] = new_skus
+        # 次轴提升为单轴 spec1 后，按标准顺序排序（如 iPhone 机型 12→13→14…）。
+        child["sku_list"] = sort_skus_by_spec(new_skus, "spec1")
 
         mp = _min_price(new_skus)
         if mp > 0:
