@@ -381,6 +381,29 @@ class GoofishProLister:
         except Exception:
             return False
 
+    @staticmethod
+    def _format_sku_summary(sku_list: list[dict[str, Any]], max_rows: int = 30) -> str:
+        """把多规格清单整理成买家可读的描述文本（普通模式不支持多规格选购，
+        故把规格/价格列进描述，便于买家留言选规格）。"""
+        lines = []
+        for s in sku_list or []:
+            spec = " ".join(
+                x for x in [str(s.get("spec1") or "").strip(),
+                            str(s.get("spec2") or "").strip()] if x
+            ).strip()
+            if not spec:
+                continue
+            try:
+                pr = float(str(s.get("price") or "").replace(",", "").strip())
+            except Exception:
+                pr = 0.0
+            lines.append(f"· {spec}：¥{pr:.2f}" if pr > 0 else f"· {spec}")
+            if len(lines) >= max_rows:
+                break
+        if not lines:
+            return ""
+        return "【可选规格】（拍下请留言所需规格）\n" + "\n".join(lines)
+
     # ── 上架主流程 ────────────────────────────────────────────
     def fill_product(self, item: dict[str, Any], dry_run: bool = True) -> dict[str, Any]:
         """把单个商品数据填进发布表单（普通商品模式）。
@@ -402,7 +425,22 @@ class GoofishProLister:
                 result["error"] = "发布表单未渲染（可能登录失效）"
                 return result
 
+            # 售价：顶层 price 优先；缺失/非正时回退到 sku_list 最低有效价
+            # （普通模式不支持多规格，多 SKU 以价格区间最低价作单一售价）。
+            def _f(v):
+                try:
+                    return float(str(v).replace(",", "").strip())
+                except Exception:
+                    return 0.0
             price = item.get("price") or item.get("original_price") or ""
+            if _f(price) <= 0:
+                _sp = [
+                    _f(s.get("price"))
+                    for s in (item.get("sku_list") or [])
+                    if _f(s.get("price")) > 0
+                ]
+                if _sp:
+                    price = min(_sp)
             title = item.get("title") or item.get("original_title") or ""
 
             # 1) 商品类型（普通商品）
@@ -455,6 +493,12 @@ class GoofishProLister:
                 else:
                     result["skipped"].append("商品标题")
             desc = item.get("description") or item.get("desc") or title
+            # 多规格降级为单品时，把规格/价格清单追加进描述，买家可见可选规格。
+            _skus_for_desc = item.get("sku_list") or []
+            if len(_skus_for_desc) > 1:
+                _summary = self._format_sku_summary(_skus_for_desc)
+                if _summary:
+                    desc = f"{desc}\n\n{_summary}" if desc else _summary
             if desc and self._fill_by_label("商品描述", desc[:5000]):
                 result["filled"].append("商品描述")
 

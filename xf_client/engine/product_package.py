@@ -385,6 +385,19 @@ def ensure_full_product_package(item: dict[str, Any]) -> dict[str, Any]:
     sku_list = normalize_sku_list(item)
     item["sku_list"] = sku_list
 
+    # 回填顶层售价：取 SKU 最低有效价（>0）。多平台采集常只产出 sku_list 而无
+    # 顶层 price，若不回填，下游(闲鱼/闲管家/导出/UI 上架价列)会拿到空价格。
+    _sku_prices = [
+        _as_float(s.get("price")) for s in sku_list
+        if _as_float(s.get("price")) > 0
+    ]
+    if _sku_prices:
+        _min_price = min(_sku_prices)
+        if _as_float(item.get("price")) <= 0:
+            item["price"] = _min_price
+        if not str(item.get("original_price") or "").strip():
+            item["original_price"] = str(_min_price)
+
     image_urls = item.get("image_urls") or []
     if isinstance(image_urls, str):
         try:
