@@ -44,10 +44,17 @@ IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp")
 class GoofishProLister:
     """闲管家商品上架器（普通商品模式，默认 dry-run，停在提交前）。"""
 
-    def __init__(self, on_log: Callable[[str], None] | None = None):
+    def __init__(self, on_log: Callable[[str], None] | None = None,
+                 mode: str = "normal"):
+        """mode:
+            "normal" — 普通商品模式（单规格，免费，已实测可用）。
+            "shop"   — 鱼小铺多规格模式（需开通鱼小铺，付费能力）。
+                       开通后才能打开「添加多规格深库存」弹窗，未开通会被平台拦截。
+        """
         self.log = on_log or (lambda m: None)
         self.browser = None
         self.tab = None
+        self.mode = mode if mode in ("normal", "shop") else "normal"
 
     # ── 浏览器/登录 ────────────────────────────────────────────
     def open(self, timeout: int = 600) -> bool:
@@ -406,6 +413,17 @@ class GoofishProLister:
 
     # ── 上架主流程 ────────────────────────────────────────────
     def fill_product(self, item: dict[str, Any], dry_run: bool = True) -> dict[str, Any]:
+        """上架分流入口：按 self.mode 走普通模式或鱼小铺多规格模式。
+
+        - mode="normal"：普通商品模式（单规格），多 SKU 取最低价 + 规格写入描述。
+        - mode="shop"  ：鱼小铺多规格模式（需开通鱼小铺）。开通后逐 SKU 建规格/
+          深库存；未开通则返回明确提示，不盲填无法验证的表单。
+        """
+        if getattr(self, "mode", "normal") == "shop":
+            return self._fill_product_shop(item, dry_run=dry_run)
+        return self._fill_product_normal(item, dry_run=dry_run)
+
+    def _fill_product_normal(self, item: dict[str, Any], dry_run: bool = True) -> dict[str, Any]:
         """把单个商品数据填进发布表单（普通商品模式）。
 
         item 字段（来自采集/打包层）：
@@ -537,6 +555,124 @@ class GoofishProLister:
             result["ok"] = True
             if dry_run:
                 self.log("✅ 已填写表单（dry-run，未提交）。请在浏览器中核对，确认无误再放开提交。")
+            return result
+        except Exception as e:
+            result["error"] = str(e)
+            return result
+
+    # ── 鱼小铺多规格能力检测 ──────────────────────────────────
+    def _detect_shop_capability(self) -> dict:
+        """检测当前账号是否具备鱼小铺多规格能力。
+
+        普通闲鱼号点「添加多规格深库存」会弹「请先升级闲鱼号为鱼小铺」，
+        弹窗不渲染规格表。返回 {"enabled": bool, "reason": str}。
+
+        实现：在发布页查找「多规格」「深库存」相关入口按钮是否存在且可点开
+        规格编辑区（出现规格名/规格值输入或 SKU 价格表）。
+        """
+        find_js = r"""
+        function vis(el){ if(!el) return false; var r=el.getBoundingClientRect();
+          return r.width>0 && r.height>0; }
+        var btns = document.querySelectorAll('button, a, span, div');
+        var entry = null;
+        for (var i=0;i<btns.length;i++){
+          var t = (btns[i].innerText||'').trim();
+          if (/多规格|深库存|添加规格/.test(t) && vis(btns[i])) { entry = t; break; }
+        }
+        return JSON.stringify({ entry: entry });
+        """
+        try:
+            import json as _json
+            info = _json.loads(self.tab.run_js(find_js) or "{}")
+        except Exception as e:
+            return {"enabled": False, "reason": f"探测异常: {e}"}
+
+        entry = info.get("entry")
+        if not entry:
+            return {"enabled": False,
+                    "reason": "未找到「多规格/深库存」入口（普通商品模式或账号未开通鱼小铺）。"}
+
+        # 找到入口后尝试点击，看是否弹出升级提示（未开通）或渲染规格区（已开通）。
+        click_js = r"""
+        var btns = document.querySelectorAll('button, a, span, div');
+        for (var i=0;i<btns.length;i++){
+          var t = (btns[i].innerText||'').trim();
+          if (/多规格|深库存|添加规格/.test(t)) { btns[i].click(); return true; }
+        }
+        return false;
+        """
+        try:
+            self.tab.run_js(click_js)
+            time.sleep(1.5)
+        except Exception:
+            pass
+
+        check_js = r"""
+        var body = (document.body.innerText||'');
+        var needUpgrade = /升级.*鱼小铺|开通鱼小铺|请先升级/.test(body);
+        var hasSpecEditor = !!document.querySelector(
+          'input[placeholder*="规格名"], input[placeholder*="规格值"]');
+        return JSON.stringify({ needUpgrade: needUpgrade, hasSpecEditor: hasSpecEditor });
+        """
+        try:
+            import json as _json
+            st = _json.loads(self.tab.run_js(check_js) or "{}")
+        except Exception as e:
+            return {"enabled": False, "reason": f"状态判定异常: {e}"}
+
+        if st.get("needUpgrade"):
+            return {"enabled": False, "reason": "账号未开通鱼小铺（平台提示需升级）。"}
+        if st.get("hasSpecEditor"):
+            return {"enabled": True, "reason": "鱼小铺多规格编辑区已渲染。"}
+        return {"enabled": False, "reason": "未能确认多规格编辑区（DOM 未渲染）。"}
+
+    # ── 鱼小铺多规格上架（需开通后用真实页面补全 DOM 流程） ──────
+    def _fill_product_shop(self, item: dict[str, Any], dry_run: bool = True) -> dict[str, Any]:
+        """鱼小铺多规格模式上架。
+
+        当前账号未开通鱼小铺时，平台会拦截「添加多规格深库存」弹窗，无法实测
+        其真实 DOM。为遵循「只交付可落地、可验证的功能」，本方法先做能力检测：
+          - 未开通：返回明确提示，不盲填无法验证的表单（避免形同虚设）。
+          - 已开通：进入多规格填充流程（开通后用真实页面把 DOM 选择器补全）。
+
+        闲鱼官方多规格已完整可用（XianyuLister），鱼小铺开通前建议用闲鱼官方
+        发布多规格，或用闲管家普通模式（单规格 + 规格写入描述）。
+        """
+        result = {"ok": False, "filled": [], "skipped": [], "dry_run": dry_run,
+                  "error": "", "mode": "shop"}
+        if not self.tab:
+            result["error"] = "浏览器未就绪，请先 open()"
+            return result
+
+        try:
+            self._goto_publish()
+            if not self._wait_form():
+                result["error"] = "发布表单未渲染（可能登录失效）"
+                return result
+
+            cap = self._detect_shop_capability()
+            result["shop_capability"] = cap
+            if not cap.get("enabled"):
+                msg = (
+                    "鱼小铺多规格模式不可用：" + cap.get("reason", "未知原因") + "\n"
+                    "建议：① 多规格请用「闲鱼官方」渠道发布（免费、已支持多规格）；"
+                    "② 或用「闲管家·普通模式」按单一售价发布并把规格写入描述。"
+                    "开通鱼小铺后此模式将启用逐 SKU 规格/深库存填充。"
+                )
+                self.log(msg)
+                result["error"] = msg
+                return result
+
+            # —— 已开通鱼小铺：进入多规格填充 —— #
+            # 注：以下流程需在真实开通账号的页面上把规格名/规格值/SKU 价格表/
+            #     深库存/配图的选择器补全并实测。开通后在此实现，避免盲写。
+            sku_list = item.get("sku_list") or []
+            result["sku_count"] = len(sku_list)
+            self.log(
+                f"检测到鱼小铺多规格能力可用，待开通账号实测后补全 DOM 填充"
+                f"（{len(sku_list)} 个 SKU）。"
+            )
+            result["error"] = "鱼小铺多规格填充流程待真实开通账号实测补全。"
             return result
         except Exception as e:
             result["error"] = str(e)

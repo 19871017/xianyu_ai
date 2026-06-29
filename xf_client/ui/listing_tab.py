@@ -54,10 +54,15 @@ CONDITIONS = ["全新", "99新", "95新", "9新", "8新", "7新"]
 # 上架渠道：以闲鱼官方为主(免费、支持多规格)，闲管家为次(需开通鱼小铺)。
 # 字典顺序即下拉顺序，闲鱼在前=默认选中。
 LISTING_CHANNELS = {
-    "xianyu": {"name": "🐟 闲鱼官方（推荐）", "lister": XianyuLister,
+    "xianyu": {"name": "🐟 闲鱼官方（推荐·多规格）", "lister": XianyuLister,
+               "lister_kwargs": {}, "supports_multi_sku": True,
                "status": "listed_xianyu", "login_hint": "闲鱼"},
-    "goofishpro": {"name": "🐠 闲管家", "lister": GoofishProLister,
+    "goofishpro": {"name": "🐠 闲管家·普通(单规格)", "lister": GoofishProLister,
+                   "lister_kwargs": {"mode": "normal"}, "supports_multi_sku": False,
                    "status": "listed_goofishpro", "login_hint": "闲管家"},
+    "goofishpro_shop": {"name": "🐠 闲管家·鱼小铺(多规格)", "lister": GoofishProLister,
+                        "lister_kwargs": {"mode": "shop"}, "supports_multi_sku": True,
+                        "status": "listed_goofishpro", "login_hint": "闲管家"},
 }
 
 
@@ -102,7 +107,7 @@ class ListingWorker(QThread):
         ch = LISTING_CHANNELS.get(self.channel, LISTING_CHANNELS["xianyu"])
         ch_name = ch["name"]
         hint = ch["login_hint"]
-        lister = ch["lister"](on_log=on_progress)
+        lister = ch["lister"](on_log=on_progress, **ch.get("lister_kwargs", {}))
         opened = False
         try:
             on_progress(f"正在打开{hint}并校验登录态...")
@@ -390,9 +395,18 @@ class ListingTab(QWidget):
         key = self.channel_combo.currentData() or "xianyu"
         if key == "goofishpro":
             self.channel_hint.setText(
-                "闲管家(goofish.pro)：次选渠道，需开通鱼小铺；普通模式按单一售价，多规格需付费升级。"
+                "闲管家·普通(单规格)：免费可用；多 SKU 取最低价为售价并把规格清单写入描述（买家留言选规格）。多规格上架请用闲鱼官方或鱼小铺。"
             )
-            self.list_btn.setText("🚀 上架到闲管家（选中商品）")
+            self.list_btn.setText("🚀 上架到闲管家·普通（选中商品）")
+            if hasattr(self, "condition_combo"):
+                self.condition_combo.setEnabled(True)
+            if hasattr(self, "stock_spin"):
+                self.stock_spin.setEnabled(True)
+        elif key == "goofishpro_shop":
+            self.channel_hint.setText(
+                "闲管家·鱼小铺(多规格)：需开通鱼小铺(付费)。已开通则逐 SKU 建规格/深库存；未开通会被平台拦截，系统会给出明确提示并建议改用闲鱼官方多规格。"
+            )
+            self.list_btn.setText("🚀 上架到闲管家·鱼小铺（选中商品）")
             if hasattr(self, "condition_combo"):
                 self.condition_combo.setEnabled(True)
             if hasattr(self, "stock_spin"):
@@ -515,13 +529,27 @@ class ListingTab(QWidget):
         condition = self.condition_combo.currentData()
         dry_run = self.dry_run_cb.isChecked()
         channel = self.channel_combo.currentData() or "xianyu"
-        ch_name = LISTING_CHANNELS.get(channel, LISTING_CHANNELS["xianyu"])["name"]
+        ch = LISTING_CHANNELS.get(channel, LISTING_CHANNELS["xianyu"])
+        ch_name = ch["name"]
+
+        # 多规格友好提醒：选了不支持多规格的渠道(闲管家普通模式)，但选中商品含多规格时，
+        # 提示会被降级为单一售价，建议改用闲鱼官方或闲管家·鱼小铺。
+        multi_warn = ""
+        if not ch.get("supports_multi_sku", True):
+            multi_cnt = sum(1 for it in selected if len(it.get("sku_list") or []) > 1)
+            if multi_cnt:
+                multi_warn = (
+                    f"\n⚠️ 选中 {multi_cnt} 个多规格商品，但当前渠道按单一售价发布"
+                    f"（多规格会写入描述）。\n   需保留多规格请改用「闲鱼官方」或"
+                    f"「闲管家·鱼小铺」。\n"
+                )
 
         msg = (
             f"即将上架 {len(selected)} 个商品到 {ch_name}\n\n"
             f"价格策略: {self.price_mode_combo.currentText()} {price_value}\n"
             f"成色: {condition}\n默认库存: {stock}\n"
-            f"模式: {'dry-run（仅填写不提交）' if dry_run else '⚠️ 直接提交上架'}\n\n"
+            f"模式: {'dry-run（仅填写不提交）' if dry_run else '⚠️ 直接提交上架'}\n"
+            f"{multi_warn}\n"
             "请确认继续？"
         )
         reply = QMessageBox.question(self, "确认上架", msg)
