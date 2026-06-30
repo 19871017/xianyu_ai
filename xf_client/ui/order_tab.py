@@ -12,7 +12,7 @@ import json
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMessageBox, QProgressBar, QTextEdit, QGroupBox,
+    QMessageBox, QProgressBar, QTextEdit, QGroupBox, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QBrush
@@ -25,6 +25,7 @@ from engine.order_tracker import (
 )
 from engine.reorder_agent import ReorderAgent, validate_reorder_plan
 from database.db_manager import db
+from utils.notifier import detect_new_orders, alert_new_orders, is_voice_enabled, set_voice_enabled
 
 
 GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
@@ -183,6 +184,12 @@ class OrderTab(QWidget):
         self.reorder_btn.setEnabled(False)
         btn_row.addWidget(self.reorder_btn)
         btn_row.addStretch()
+        self.voice_cb = QCheckBox("🔊 新订单语音提醒")
+        self.voice_cb.setChecked(is_voice_enabled())
+        self.voice_cb.setFont(QFont(GLOBAL_FONT_FAMILY, 12))
+        self.voice_cb.setToolTip("抓单后若发现新订单，弹系统通知并语音播报")
+        self.voice_cb.toggled.connect(self._on_voice_toggled)
+        btn_row.addWidget(self.voice_cb)
         layout.addLayout(btn_row)
 
         self.table = QTableWidget()
@@ -208,6 +215,9 @@ class OrderTab(QWidget):
         layout.addWidget(self.log_area)
 
         self._selected_row = -1
+
+    def _on_voice_toggled(self, checked):
+        set_voice_enabled(checked)
 
     # ── 数据接口 ──
     def refresh_items(self, items):
@@ -245,6 +255,15 @@ class OrderTab(QWidget):
         self._append_log(f"\n✅ 完成：{len(self.rows)} 条订单已匹配并落库。")
         if not self.rows:
             self._append_log("未抓到订单（可能闲鱼已售页改版或当前无卖出）。")
+        else:
+            try:
+                orders = [r.get("order") for r in self.rows if isinstance(r, dict)]
+                new_count = detect_new_orders(orders)
+                if new_count > 0:
+                    self._append_log(f"🔔 检测到 {new_count} 个新订单，已语音提醒。")
+                    alert_new_orders(new_count)
+            except Exception as e:
+                self._append_log(f"新订单提醒异常：{e}")
 
     def _fill_table(self):
         self.table.setRowCount(len(self.rows))
