@@ -556,6 +556,12 @@ def apply_product_edits(item: dict[str, Any], edits: dict[str, Any]) -> dict[str
         if price > 0:
             item["new_price"] = price
             item["price"] = price
+            # 统一售价需同步到每个 SKU：多规格发布逐 SKU 读 sku_list 的价格，
+            # 只改顶层 price 会导致多规格仍按原价上架。
+            _sku_list = normalize_sku_list(item)
+            for _sku in _sku_list:
+                _sku["price"] = price
+            item["sku_list"] = _sku_list
 
     sku_edits = edits.get("sku_edits")
     if isinstance(sku_edits, list) and sku_edits:

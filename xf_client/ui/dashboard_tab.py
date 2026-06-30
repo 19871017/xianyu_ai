@@ -5,12 +5,13 @@
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QPushButton, QGroupBox, QFrame,
+    QPushButton, QGroupBox, QFrame, QMessageBox,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from engine.dashboard_stats import compute_dashboard
+from engine.xianyu_listings import fetch_and_store, get_latest_listing_summary
 from database.db_manager import db
 
 
@@ -49,6 +50,21 @@ class _StatCard(QFrame):
         self.sub_label.setText(sub)
 
 
+class _SyncListingWorker(QThread):
+    """后台抓取闲鱼官方在售商品并落库（只读，不下架/编辑）。"""
+    progress_msg = pyqtSignal(str)
+    finished = pyqtSignal(dict)
+
+    def run(self):
+        def log(msg):
+            self.progress_msg.emit(msg)
+        try:
+            result = fetch_and_store(on_log=log)
+        except Exception as e:
+            result = {"ok": False, "error": str(e)}
+        self.finished.emit(result or {"ok": False, "error": "未知错误"})
+
+
 class DashboardTab(QWidget):
     def __init__(self, main_window):
         super().__init__()
@@ -75,7 +91,24 @@ class DashboardTab(QWidget):
         )
         self.refresh_btn.clicked.connect(lambda: self.refresh_items(None))
         top.addWidget(self.refresh_btn)
+
+        self.sync_btn = QPushButton("🔄 同步闲鱼在售")
+        self.sync_btn.setMinimumHeight(34)
+        self.sync_btn.setStyleSheet(
+            "QPushButton { background:#1565c0; color:white; border-radius:4px; "
+            "padding:4px 18px; font-size:13px; }"
+            "QPushButton:hover { background:#0d47a1; }"
+            "QPushButton:disabled { background:#bbb; }"
+        )
+        self.sync_btn.clicked.connect(self._sync_listings)
+        top.addWidget(self.sync_btn)
         layout.addLayout(top)
+
+        # 同步状态提示行
+        self.sync_status = QLabel("")
+        self.sync_status.setFont(QFont(GLOBAL_FONT_FAMILY, 11))
+        self.sync_status.setStyleSheet("color:#888;")
+        layout.addWidget(self.sync_status)
 
         # ── 指标卡片区 ──
         cards = QGridLayout()
@@ -92,6 +125,8 @@ class DashboardTab(QWidget):
         cards.addWidget(self.card_orders, 1, 0)
         cards.addWidget(self.card_revenue, 1, 1)
         cards.addWidget(self.card_risk, 1, 2)
+        self.card_xianyu = _StatCard("闲鱼在售(实时)", "#00838f")
+        cards.addWidget(self.card_xianyu, 2, 0)
         layout.addLayout(cards)
 
         # ── 明细分组区 ──
@@ -179,6 +214,50 @@ class DashboardTab(QWidget):
             f"单品均毛利：¥{pf['avg_gross_margin']:.2f}",
             f"（基于 {pf['sample']} 个已上架商品）",
         ])
+
+        self._refresh_xianyu_card()
+
+    def _refresh_xianyu_card(self):
+        """根据最近一次在售快照刷新「闲鱼在售」卡片。"""
+        try:
+            snap = get_latest_listing_summary()
+        except Exception:
+            snap = None
+        if not snap:
+            self.card_xianyu.set_value("-", "点「同步闲鱼在售」获取")
+            return
+        ts = (snap.get("snapshot_time") or "").replace("T", " ")[:16]
+        self.card_xianyu.set_value(
+            snap.get("active_listings", 0),
+            f"想要 {snap.get('total_wants', 0)} / 浏览 {snap.get('total_views', 0)}"
+            + (f" · {ts}" if ts else ""),
+        )
+
+    def _sync_listings(self):
+        if not self.main_window.is_licensed():
+            QMessageBox.warning(self, "未激活", "请先在设置页面激活 License 后使用")
+            return
+        self.sync_btn.setEnabled(False)
+        self.sync_btn.setText("同步中…")
+        self.sync_status.setText("正在打开闲鱼并校验登录态…")
+        self._sync_worker = _SyncListingWorker()
+        self._sync_worker.progress_msg.connect(lambda m: self.sync_status.setText(m))
+        self._sync_worker.finished.connect(self._on_sync_done)
+        self._sync_worker.start()
+
+    def _on_sync_done(self, result):
+        self.sync_btn.setEnabled(True)
+        self.sync_btn.setText("🔄 同步闲鱼在售")
+        if result.get("ok"):
+            self.sync_status.setText(
+                f"✅ 同步完成：在售 {result.get('active_listings', 0)} 个，"
+                f"想要 {result.get('total_wants', 0)}，浏览 {result.get('total_views', 0)}"
+            )
+            self._refresh_xianyu_card()
+        else:
+            err = result.get("error") or "未知错误"
+            self.sync_status.setText(f"⚠️ 同步失败：{err}")
+            QMessageBox.warning(self, "同步失败", f"未能同步闲鱼在售商品：\n{err}")
 
     @staticmethod
     def _pct(part, total):

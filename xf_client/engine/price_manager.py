@@ -10,12 +10,14 @@ class PriceManager:
     def batch_reduce_price(self, items: list, reduce_percent: float = 10) -> list:
         """批量降价（百分比）"""
         results = []
+        factor = 1 - reduce_percent / 100
         for item in items:
             try:
                 original_price = self._parse_price(item)
-                new_price = original_price * (1 - reduce_percent / 100)
-                new_price = max(0.01, new_price)
+                new_price = max(0.01, original_price * factor)
+                item["price"] = round(new_price, 2)
                 item["new_price"] = f"{new_price:.2f}"
+                self._apply_to_skus(item, lambda p: max(0.01, p * factor))
                 results.append(item)
             except (ValueError, TypeError):
                 item["new_price"] = item.get("original_price", "0")
@@ -25,11 +27,14 @@ class PriceManager:
     def batch_markup_price(self, items: list, markup_percent: float = 10) -> list:
         """批量加价（百分比）"""
         results = []
+        factor = 1 + markup_percent / 100
         for item in items:
             try:
                 original_price = self._parse_price(item)
-                new_price = original_price * (1 + markup_percent / 100)
+                new_price = original_price * factor
+                item["price"] = round(new_price, 2)
                 item["new_price"] = f"{new_price:.2f}"
+                self._apply_to_skus(item, lambda p: p * factor)
                 results.append(item)
             except (ValueError, TypeError):
                 item["new_price"] = item.get("original_price", "0")
@@ -39,7 +44,9 @@ class PriceManager:
     def batch_set_price(self, items: list, price: float) -> list:
         """批量统一设价"""
         for item in items:
+            item["price"] = round(price, 2)
             item["new_price"] = f"{price:.2f}"
+            self._apply_to_skus(item, lambda _p: price)
         return items
 
     def batch_reduce_fixed(self, items: list, reduce_amount: float) -> list:
@@ -49,12 +56,38 @@ class PriceManager:
             try:
                 original_price = self._parse_price(item)
                 new_price = max(0.01, original_price - reduce_amount)
+                item["price"] = round(new_price, 2)
                 item["new_price"] = f"{new_price:.2f}"
+                self._apply_to_skus(item, lambda p: max(0.01, p - reduce_amount))
                 results.append(item)
             except (ValueError, TypeError):
                 item["new_price"] = item.get("original_price", "0")
                 results.append(item)
         return results
+
+    def _apply_to_skus(self, item: dict, fn) -> None:
+        """把调价函数作用到每个 SKU 的价格。
+
+        多规格商品发布时逐 SKU 读取 sku_list 里的 price，只改顶层 new_price
+        不会影响发布价，必须同步调整每个 SKU，否则多规格仍按原价发布。
+        """
+        sku_list = item.get("sku_list")
+        if not isinstance(sku_list, list):
+            return
+        for sku in sku_list:
+            if not isinstance(sku, dict):
+                continue
+            try:
+                base = float(
+                    str(sku.get("price") or 0)
+                    .replace(",", "").replace("，", "")
+                    .replace("¥", "").replace("￥", "").strip()
+                )
+            except (ValueError, TypeError):
+                continue
+            if base <= 0:
+                continue
+            sku["price"] = round(fn(base), 2)
 
     def _parse_price(self, item: dict) -> float:
         """从item中解析价格"""

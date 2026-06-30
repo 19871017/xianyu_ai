@@ -198,34 +198,43 @@ class SettingsTab(QWidget):
         hint.setWordWrap(True)
         api_layout.addWidget(hint)
 
+        # 统一用表单布局，让「API地址 / API Key / 选择模型」三行标签右对齐、输入框左对齐。
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+
         # API地址
-        url_layout = QHBoxLayout()
-        url_label = QLabel("API地址:")
-        url_label.setMinimumWidth(80)
-        url_layout.addWidget(url_label)
         self.api_url_input = QLineEdit()
         self.api_url_input.setPlaceholderText("如: https://api.deepseek.com 或 http://127.0.0.1:3000")
         self.api_url_input.setText(self._ai_config.get("AI_API_URL", ""))
         self.api_url_input.setMinimumHeight(36)
-        url_layout.addWidget(self.api_url_input)
-        api_layout.addLayout(url_layout)
+        form.addRow("API地址:", self.api_url_input)
 
         # API Key
-        key_layout2 = QHBoxLayout()
-        key_label2 = QLabel("API Key:")
-        key_label2.setMinimumWidth(80)
-        key_layout2.addWidget(key_label2)
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setPlaceholderText("输入API Key")
         self.api_key_input.setText(self._ai_config.get("AI_API_KEY", ""))
         self.api_key_input.setMinimumHeight(36)
-        key_layout2.addWidget(self.api_key_input)
-        api_layout.addLayout(key_layout2)
+        form.addRow("API Key:", self.api_key_input)
 
-        # 拉取模型按钮
-        fetch_layout = QHBoxLayout()
-        fetch_layout.addStretch()
+        # 选择模型 + 拉取按钮（同一行：左侧下拉框拉伸，右侧拉取按钮）
+        model_row = QHBoxLayout()
+        model_row.setSpacing(8)
+        self.model_combo = QComboBox()
+        self.model_combo.setMinimumHeight(36)
+        self.model_combo.setEditable(True)
+        self.model_combo.setPlaceholderText("请先拉取模型列表，或手动输入模型名")
+        self.model_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        saved_model = self._ai_config.get("AI_API_MODEL", "")
+        if saved_model:
+            self.model_combo.addItem(saved_model)
+            self.model_combo.setCurrentText(saved_model)
+        model_row.addWidget(self.model_combo, 1)
+
         self.fetch_models_btn = QPushButton("🔄 拉取模型列表")
         self.fetch_models_btn.setMinimumHeight(36)
         self.fetch_models_btn.setStyleSheet(
@@ -234,25 +243,10 @@ class SettingsTab(QWidget):
             "QPushButton:hover { background: #1565C0; }"
         )
         self.fetch_models_btn.clicked.connect(self._fetch_models)
-        fetch_layout.addWidget(self.fetch_models_btn)
-        fetch_layout.addStretch()
-        api_layout.addLayout(fetch_layout)
+        model_row.addWidget(self.fetch_models_btn, 0)
+        form.addRow("选择模型:", model_row)
 
-        # 模型选择
-        model_layout = QHBoxLayout()
-        model_label = QLabel("选择模型:")
-        model_label.setMinimumWidth(80)
-        model_layout.addWidget(model_label)
-        self.model_combo = QComboBox()
-        self.model_combo.setMinimumHeight(36)
-        self.model_combo.setEditable(True)
-        self.model_combo.setPlaceholderText("请先拉取模型列表，或手动输入模型名")
-        saved_model = self._ai_config.get("AI_API_MODEL", "")
-        if saved_model:
-            self.model_combo.addItem(saved_model)
-            self.model_combo.setCurrentText(saved_model)
-        model_layout.addWidget(self.model_combo)
-        api_layout.addLayout(model_layout)
+        api_layout.addLayout(form)
 
         # 保存 + 测试
         btn_layout = QHBoxLayout()

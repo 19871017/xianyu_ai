@@ -108,6 +108,45 @@ class ListingWorker(QThread):
         # fixed
         return round(self.price_value, 2) if self.price_value > 0 else base
 
+    def _adjust_one(self, base: float) -> float:
+        """对单个价格按当前价格策略调整。"""
+        if base <= 0:
+            # 固定价模式下原价缺失也允许直接设定。
+            return round(self.price_value, 2) if self.price_mode == "fixed" and self.price_value > 0 else 0.0
+        if self.price_mode == "markup":
+            return round(base * (1 + self.price_value / 100), 2)
+        if self.price_mode == "markdown":
+            return round(max(0.01, base * (1 - self.price_value / 100)), 2)
+        # fixed
+        return round(self.price_value, 2) if self.price_value > 0 else base
+
+    def _apply_price_to_pkg(self, pkg: dict) -> None:
+        """把价格策略同时作用到顶层 price 和每个 SKU。
+
+        多规格商品发布时逐 SKU 读取 sku_list 的 price，若只改顶层 price，
+        多规格仍按采集原价上架。这里对每个 SKU 各自按策略调价：
+          - 加价/降价：按该 SKU 自身价格百分比计算；
+          - 固定售价：所有 SKU 统一设为该价。
+        """
+        pkg["price"] = self._final_price(pkg)
+        sku_list = pkg.get("sku_list")
+        if not isinstance(sku_list, list):
+            return
+        for sku in sku_list:
+            if not isinstance(sku, dict):
+                continue
+            try:
+                base = float(
+                    str(sku.get("price") or 0)
+                    .replace(",", "").replace("，", "")
+                    .replace("¥", "").replace("￥", "").strip()
+                )
+            except (ValueError, TypeError):
+                base = 0.0
+            new_p = self._adjust_one(base)
+            if new_p > 0:
+                sku["price"] = new_p
+
     def _apply_ai_rewrite(self, item: dict, on_progress) -> None:
         """上架前用 AI 改写文案，原地写回 item 的 title/description/tags。
 
@@ -196,8 +235,7 @@ class ListingWorker(QThread):
                 try:
                     for j, unit in enumerate(units):
                         pkg = ensure_full_product_package(dict(unit))
-                        price = self._final_price(unit)
-                        pkg["price"] = price
+                        self._apply_price_to_pkg(pkg)
                         pkg["stock"] = pkg.get("stock") or self.stock
                         pkg["condition"] = self.condition
                         if len(units) > 1:

@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
-from engine.excel_exporter import ExcelExporter
+from engine.product_package import export_products_package, normalize_sku_list
 
 
 GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
@@ -27,12 +27,12 @@ class ExportTab(QWidget):
         layout.addWidget(self.info_label)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels(["序号", "商品ID", "原始标题", "AI标题", "价格", "想要", "浏览", "来源链接"])
+        self.table.setColumnCount(9)
+        self.table.setHorizontalHeaderLabels(["序号", "商品ID", "原始标题", "AI标题", "价格", "规格数", "想要", "浏览", "来源链接"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
@@ -67,11 +67,16 @@ class ExportTab(QWidget):
             self.table.setItem(i, 2, QTableWidgetItem(item.get("original_title", "")))
             self.table.setItem(i, 3, QTableWidgetItem(item.get("ai_title", "")))
             self.table.setItem(i, 4, QTableWidgetItem(item.get("original_price", "")))
-            self.table.setItem(i, 5, QTableWidgetItem(item.get("wants", "0")))
-            self.table.setItem(i, 6, QTableWidgetItem(item.get("views", "0")))
+            try:
+                sku_count = len(normalize_sku_list(item))
+            except Exception:
+                sku_count = len(item.get("sku_list") or [])
+            self.table.setItem(i, 5, QTableWidgetItem(str(sku_count)))
+            self.table.setItem(i, 6, QTableWidgetItem(item.get("wants", "0")))
+            self.table.setItem(i, 7, QTableWidgetItem(item.get("views", "0")))
             link = item.get("link", "")
             link_display = link[:50] + "..." if len(link) > 50 else link
-            self.table.setItem(i, 7, QTableWidgetItem(link_display))
+            self.table.setItem(i, 8, QTableWidgetItem(link_display))
 
     def _show_context_menu(self, position):
         from PyQt6.QtWidgets import QApplication
@@ -98,9 +103,10 @@ class ExportTab(QWidget):
             QMessageBox.warning(self, "提示", "没有数据可导出")
             return
 
+        out_dir = QFileDialog.getExistingDirectory(self, "选择导出目录（留空则用默认目录）")
         try:
-            exporter = ExcelExporter()
-            filepath = exporter.export(items)
-            QMessageBox.information(self, "导出成功", f"已导出到:\n{filepath}")
+            output_dir = out_dir or None
+            result_dir = export_products_package(items, output_dir=output_dir)
+            QMessageBox.information(self, "导出成功", f"已按规格全部解析导出到:\n{result_dir}")
         except Exception as e:
             QMessageBox.critical(self, "导出失败", str(e))
