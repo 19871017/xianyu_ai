@@ -8,7 +8,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QCursor, QFont
-from license.license_validator import LicenseValidator
 from license.machine_id import get_machine_id
 from database.db_manager import db
 from config import SERVER_URL, AI_API_URL, AI_API_KEY, AI_MODEL
@@ -383,7 +382,7 @@ class SettingsTab(QWidget):
         )
 
     def _update_license_status(self):
-        validator = LicenseValidator()
+        validator = self.main_window.license_validator
         result = validator.verify()
         if result.get("valid"):
             expires = result.get("expires_at", "N/A")
@@ -401,7 +400,7 @@ class SettingsTab(QWidget):
             QMessageBox.warning(self, "提示", "请输入License Key")
             return
 
-        validator = LicenseValidator()
+        validator = self.main_window.license_validator
         result = validator.activate(key)
         if result.get("success"):
             QMessageBox.information(self, "成功", "License激活成功！")

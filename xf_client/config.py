@@ -1,8 +1,24 @@
 """全局配置 - 多平台电商AI助手 v3.0"""
+import base64
 import os
 
+# 服务端地址/密钥不以明文写入源码：经 XOR+base64 编码后存放，运行时解码。
+# 配合核心模块 Cython 编译（config.py 会被编译为原生扩展），可避免直接用
+# strings 从二进制中提取出域名/密钥明文。仍可被环境变量覆盖（便于本地调试）。
+_OBF_KEY = b"xf2024kiro"
+
+
+def _deobf(token: str) -> str:
+    try:
+        raw = base64.b64decode(token.encode())
+        return bytes(c ^ _OBF_KEY[i % len(_OBF_KEY)] for i, c in enumerate(raw)).decode()
+    except Exception:
+        return ""
+
+
 # ──────────────────────── 服务端 ────────────────────────
-SERVER_BASE_URL = os.environ.get("XF_SERVER_BASE_URL", "https://xy.lxd997.dpdns.org")
+_DEF_SERVER = _deobf("EBJGQEEOREYKFlYKSlQLDVxHFh8cCEEeXUYM")
+SERVER_BASE_URL = os.environ.get("XF_SERVER_BASE_URL", _DEF_SERVER)
 API_LICENSE_ACTIVATE = f"{SERVER_BASE_URL}/api/license/activate"
 API_LICENSE_VERIFY   = f"{SERVER_BASE_URL}/api/license/verify"
 API_AUTH_REGISTER    = f"{SERVER_BASE_URL}/api/auth/register"
@@ -15,7 +31,7 @@ DOWNLOAD_SITE_URL    = os.environ.get("XF_DOWNLOAD_SITE_URL", f"{SERVER_BASE_URL
 
 # 客户端调用 activate/verify/heartbeat 必须携带的密钥（与服务端 CLIENT_API_KEY 一致）。
 # 优先环境变量，便于分发时不写死在源码里。
-CLIENT_API_KEY = os.environ.get("XF_CLIENT_API_KEY", "a5008d5e75e902a25cde6f3e72181d25ed9967471e8d2545540bf624a6f39626")
+CLIENT_API_KEY = os.environ.get("XF_CLIENT_API_KEY", _deobf("GVMCAApQXgxFWh1fAgJTBl4KFgpOAAFVBQZaUUMLSlNXVAsNXV5GWEkDClQAAV9cR1tIBFQGAAAKXxRcQVAABg=="))
 
 # 离线宽限：远程不可达时，本地最多容忍的时长（秒）。超过即判定失效。
 LICENSE_OFFLINE_GRACE_SECONDS = int(os.environ.get("XF_OFFLINE_GRACE_SECONDS", str(72 * 3600)))

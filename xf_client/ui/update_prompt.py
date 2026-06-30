@@ -52,15 +52,19 @@ class UpdatePromptManager(QObject):
         notes = (res.get("notes") or "").strip()
         url = res.get("download_url") or ""
         force = res.get("force_update")
-        title = "发现新版本"
-        body = f"检测到新版本 v{ver}（当前 v{APP_VERSION}）。"
         if force:
-            body += "\n\n这是一次重要更新，建议立即升级。"
+            self._prompt_force(ver, notes, url)
+        else:
+            self._prompt_optional(ver, notes, url)
+
+    def _prompt_optional(self, ver, notes, url):
+        """普通更新：可「稍后」，不阻断使用。"""
+        body = f"检测到新版本 v{ver}（当前 v{APP_VERSION}）。"
         if notes:
             body += f"\n\n更新内容：\n{notes[:500]}"
         body += "\n\n点击「确定」前往下载页面获取新版本。"
         box = QMessageBox()
-        box.setWindowTitle(title)
+        box.setWindowTitle("发现新版本")
         box.setIcon(QMessageBox.Icon.Information)
         box.setText(body)
         box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
@@ -68,3 +72,37 @@ class UpdatePromptManager(QObject):
         box.button(QMessageBox.StandardButton.Cancel).setText("稍后")
         if box.exec() == QMessageBox.StandardButton.Ok and url:
             QDesktopServices.openUrl(QUrl(url))
+
+    def _prompt_force(self, ver, notes, url):
+        """强制更新：旧版本停止使用。仅「去下载」按钮，关闭即退出程序。"""
+        body = (
+            f"检测到重要更新 v{ver}（当前 v{APP_VERSION}）。\n\n"
+            "当前版本已停止支持，必须升级后才能继续使用。"
+        )
+        if notes:
+            body += f"\n\n更新内容：\n{notes[:500]}"
+        body += "\n\n点击「去下载」前往下载页面获取新版本，程序将退出。"
+        box = QMessageBox()
+        box.setWindowTitle("需要更新")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(body)
+        # 仅一个按钮；移除窗口关闭按钮也无法绕过——无论如何都会退出。
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.button(QMessageBox.StandardButton.Ok).setText("去下载")
+        box.exec()
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+        self._force_quit()
+
+    @staticmethod
+    def _force_quit():
+        """强制退出应用：旧版本不允许继续运行。"""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+        except Exception:
+            pass
+        import os
+        os._exit(0)
