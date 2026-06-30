@@ -4,12 +4,13 @@ import requests
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QGroupBox, QMessageBox,
-    QApplication, QComboBox, QFormLayout, QSizePolicy,
+    QApplication, QComboBox, QFormLayout, QSizePolicy, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QCursor, QFont
 from license.license_validator import LicenseValidator
 from license.machine_id import get_machine_id
+from database.db_manager import db
 from config import SERVER_URL, AI_API_URL, AI_API_KEY, AI_MODEL
 
 
@@ -285,6 +286,80 @@ class SettingsTab(QWidget):
         api_layout.addWidget(self.ai_status_label)
 
         layout.addWidget(api_group)
+
+        # ════════════ 数据管理（历史数据清理）════════════
+        data_group = QGroupBox("🗂 数据管理（历史数据清理）")
+        data_group.setFont(QFont(GLOBAL_FONT_FAMILY, 13, QFont.Weight.Bold))
+        data_layout = QVBoxLayout(data_group)
+        data_layout.setSpacing(8)
+
+        self.data_counts_label = QLabel("")
+        self.data_counts_label.setStyleSheet("color: #555; font-size: 13px;")
+        self.data_counts_label.setWordWrap(True)
+        data_layout.addWidget(self.data_counts_label)
+
+        self.del_local_checkbox = QCheckBox("同时删除本地关联文件（采集的图片目录，不可恢复）")
+        self.del_local_checkbox.setStyleSheet("font-size: 13px;")
+        data_layout.addWidget(self.del_local_checkbox)
+
+        # 第一行：商品 / 订单 / 采集记录
+        row1 = QHBoxLayout()
+        self.clear_products_btn = QPushButton("🗑 清空商品")
+        self.clear_products_btn.setMinimumHeight(34)
+        self.clear_products_btn.clicked.connect(self._clear_products)
+        row1.addWidget(self.clear_products_btn)
+
+        self.clear_orders_btn = QPushButton("🗑 清空订单")
+        self.clear_orders_btn.setMinimumHeight(34)
+        self.clear_orders_btn.clicked.connect(self._clear_orders)
+        row1.addWidget(self.clear_orders_btn)
+
+        self.clear_collect_btn = QPushButton("🗑 清空采集记录")
+        self.clear_collect_btn.setMinimumHeight(34)
+        self.clear_collect_btn.clicked.connect(self._clear_collect_records)
+        row1.addWidget(self.clear_collect_btn)
+        data_layout.addLayout(row1)
+
+        # 第二行：监控快照 / 源复检 / 定时任务
+        row2 = QHBoxLayout()
+        self.clear_monitor_btn = QPushButton("🗑 清空运营快照")
+        self.clear_monitor_btn.setMinimumHeight(34)
+        self.clear_monitor_btn.clicked.connect(self._clear_monitor)
+        row2.addWidget(self.clear_monitor_btn)
+
+        self.clear_recheck_btn = QPushButton("🗑 清空源复检")
+        self.clear_recheck_btn.setMinimumHeight(34)
+        self.clear_recheck_btn.clicked.connect(self._clear_rechecks)
+        row2.addWidget(self.clear_recheck_btn)
+
+        self.clear_tasks_btn = QPushButton("🗑 清空定时任务")
+        self.clear_tasks_btn.setMinimumHeight(34)
+        self.clear_tasks_btn.clicked.connect(self._clear_tasks)
+        row2.addWidget(self.clear_tasks_btn)
+        data_layout.addLayout(row2)
+
+        # 第三行：一键清空全部
+        self.clear_all_btn = QPushButton("⚠️ 清空全部历史数据")
+        self.clear_all_btn.setMinimumHeight(38)
+        self.clear_all_btn.setStyleSheet(
+            "QPushButton { background: #c62828; color: white; "
+            "border-radius: 4px; padding: 6px 24px; font-size: 14px; font-weight: bold; }"
+            "QPushButton:hover { background: #b71c1c; }"
+        )
+        self.clear_all_btn.clicked.connect(self._clear_all)
+        data_layout.addWidget(self.clear_all_btn)
+
+        refresh_counts_layout = QHBoxLayout()
+        refresh_counts_layout.addStretch()
+        self.refresh_counts_btn = QPushButton("🔄 刷新统计")
+        self.refresh_counts_btn.setMinimumHeight(30)
+        self.refresh_counts_btn.clicked.connect(self._refresh_data_counts)
+        refresh_counts_layout.addWidget(self.refresh_counts_btn)
+        data_layout.addLayout(refresh_counts_layout)
+
+        layout.addWidget(data_group)
+        self._refresh_data_counts()
+
         layout.addStretch()
 
     def _copy_machine_id(self):
@@ -461,6 +536,153 @@ class SettingsTab(QWidget):
         finally:
             self.test_ai_btn.setEnabled(True)
             self.test_ai_btn.setText("🧪 测试AI连接")
+
+    # ════════════ 数据管理 ════════════
+    _COUNT_LABELS = {
+        "products": "商品",
+        "orders": "订单",
+        "collect_records": "采集记录",
+        "monitor_snapshots": "运营快照",
+        "source_rechecks": "源复检",
+        "scheduled_tasks": "定时任务",
+    }
+
+    def _refresh_data_counts(self):
+        try:
+            counts = db.data_counts()
+        except Exception as e:
+            self.data_counts_label.setText(f"统计读取失败: {e}")
+            return
+        parts = [f"{self._COUNT_LABELS.get(k, k)}: {counts.get(k, 0)}" for k in self._COUNT_LABELS]
+        self.data_counts_label.setText("当前本地数据 —— " + " | ".join(parts))
+
+    def _confirm(self, title: str, text: str) -> bool:
+        ret = QMessageBox.question(
+            self, title, text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return ret == QMessageBox.StandardButton.Yes
+
+    def _reload_main(self):
+        """清理后刷新主窗口共享数据与各 Tab。"""
+        try:
+            self.main_window.reload_from_db()
+        except Exception as e:
+            print(f"刷新主窗口失败: {e}")
+
+    def _clear_products(self):
+        remove_local = self.del_local_checkbox.isChecked()
+        extra = "，并删除本地图片目录" if remove_local else ""
+        if not self._confirm("确认清空商品",
+                             f"将删除全部商品记录{extra}。此操作不可恢复，确定继续？"):
+            return
+        try:
+            res = db.clear_products(remove_local=remove_local)
+        except Exception as e:
+            QMessageBox.critical(self, "失败", f"清空商品失败: {e}")
+            return
+        self._reload_main()
+        self._refresh_data_counts()
+        msg = f"已删除 {res.get('products', 0)} 个商品"
+        if remove_local:
+            msg += f"，清理本地目录 {res.get('local_dirs', 0)} 个"
+        QMessageBox.information(self, "完成", msg)
+
+    def _clear_orders(self):
+        if not self._confirm("确认清空订单", "将删除全部订单记录。此操作不可恢复，确定继续？"):
+            return
+        try:
+            n = db.clear_orders()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", f"清空订单失败: {e}")
+            return
+        self._reload_main()
+        self._refresh_data_counts()
+        QMessageBox.information(self, "完成", f"已删除 {n} 条订单")
+
+    def _clear_collect_records(self):
+        if not self._confirm("确认清空采集记录", "将删除全部采集历史记录。此操作不可恢复，确定继续？"):
+            return
+        try:
+            n = db.clear_collect_records()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", f"清空采集记录失败: {e}")
+            return
+        self._refresh_data_counts()
+        QMessageBox.information(self, "完成", f"已删除 {n} 条采集记录")
+
+    def _clear_monitor(self):
+        if not self._confirm("确认清空运营快照", "将删除全部运营监控快照。此操作不可恢复，确定继续？"):
+            return
+        try:
+            n = db.clear_all_monitor_snapshots()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", f"清空运营快照失败: {e}")
+            return
+        self._refresh_data_counts()
+        QMessageBox.information(self, "完成", f"已删除 {n} 条运营快照")
+
+    def _clear_rechecks(self):
+        if not self._confirm("确认清空源复检", "将删除全部源复检记录。此操作不可恢复，确定继续？"):
+            return
+        try:
+            n = db.clear_all_rechecks()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", f"清空源复检失败: {e}")
+            return
+        self._refresh_data_counts()
+        QMessageBox.information(self, "完成", f"已删除 {n} 条源复检记录")
+
+    def _clear_tasks(self):
+        if not self._confirm("确认清空定时任务", "将删除全部定时任务。此操作不可恢复，确定继续？"):
+            return
+        try:
+            n = db.clear_scheduled_tasks()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", f"清空定时任务失败: {e}")
+            return
+        try:
+            self.main_window.scheduler_tab.reload_tasks()
+        except Exception:
+            pass
+        self._refresh_data_counts()
+        QMessageBox.information(self, "完成", f"已删除 {n} 个定时任务")
+
+    def _clear_all(self):
+        remove_local = self.del_local_checkbox.isChecked()
+        extra = "，并删除本地图片目录" if remove_local else ""
+        if not self._confirm("确认清空全部",
+                             f"将删除全部历史数据（商品/订单/采集记录/运营快照/源复检/定时任务）{extra}。\n"
+                             "此操作不可恢复，确定继续？"):
+            return
+        summary = {}
+        try:
+            summary["products"] = db.clear_products(remove_local=remove_local)
+            summary["orders"] = db.clear_orders()
+            summary["collect"] = db.clear_collect_records()
+            summary["monitor"] = db.clear_all_monitor_snapshots()
+            summary["recheck"] = db.clear_all_rechecks()
+            summary["tasks"] = db.clear_scheduled_tasks()
+        except Exception as e:
+            QMessageBox.critical(self, "失败", f"清空过程中出错: {e}")
+            return
+        self._reload_main()
+        try:
+            self.main_window.scheduler_tab.reload_tasks()
+        except Exception:
+            pass
+        self._refresh_data_counts()
+        p = summary.get("products", {})
+        msg = (
+            f"已清空全部历史数据：\n"
+            f"商品 {p.get('products', 0)}、订单 {summary.get('orders', 0)}、"
+            f"采集记录 {summary.get('collect', 0)}、运营快照 {summary.get('monitor', 0)}、"
+            f"源复检 {summary.get('recheck', 0)}、定时任务 {summary.get('tasks', 0)}"
+        )
+        if remove_local:
+            msg += f"\n清理本地目录 {p.get('local_dirs', 0)} 个"
+        QMessageBox.information(self, "完成", msg)
 
     def refresh_items(self, items):
         pass

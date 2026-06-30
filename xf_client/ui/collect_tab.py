@@ -206,6 +206,7 @@ class CollectWorker(QThread):
                 if self.mode == "keyword":
                     items = collector.search_by_keyword(self.value, self.count)
                 else:
+                    # 闲鱼“店铺采集”等价于按卖家主页采集
                     items = collector.collect_by_homepage(self.value, self.count)
 
             elif self.platform == "pdd":
@@ -219,6 +220,8 @@ class CollectWorker(QThread):
                 collector = AlibabaCollector(on_progress=on_progress)
                 if self.mode == "keyword":
                     items = collector.search_by_keyword(self.value, self.count)
+                elif self.mode == "shop":
+                    items = collector.collect_by_shop(self.value, self.count)
                 else:
                     items = collector.collect_by_link(self.value)
 
@@ -226,6 +229,8 @@ class CollectWorker(QThread):
                 collector = TaobaoCollector(on_progress=on_progress)
                 if self.mode == "keyword":
                     items = collector.search_by_keyword(self.value, self.count)
+                elif self.mode == "shop":
+                    items = collector.collect_by_shop(self.value, self.count)
                 else:
                     items = collector.collect_by_link(self.value)
 
@@ -274,6 +279,8 @@ PLATFORM_HINTS = {
         "keyword": "输入要搜索的关键词，如：iPhone 15",
         "link": "粘贴闲鱼商品链接，如：https://www.goofish.com/item?id=xxx",
         "link_label": "主页/商品链接:",
+        "shop": "粘贴闲鱼卖家主页链接，如：https://www.goofish.com/personal?userId=xxx",
+        "shop_label": "卖家主页链接:",
     },
     "pdd": {
         "keyword": "输入拼多多搜索关键词，如：无线耳机",
@@ -284,11 +291,15 @@ PLATFORM_HINTS = {
         "keyword": "输入1688搜索关键词，如：手机壳批发",
         "link": "粘贴1688商品链接，如：https://detail.1688.com/offer/xxx.html",
         "link_label": "商品链接:",
+        "shop": "粘贴1688店铺链接，如：https://xxx.1688.com/ 或铺货页",
+        "shop_label": "店铺链接:",
     },
     "taobao": {
         "keyword": "输入淘宝/天猫搜索关键词，如：蓝牙耳机",
         "link": "粘贴淘宝/天猫商品链接，如：https://item.taobao.com/item.htm?id=xxx",
         "link_label": "商品链接:",
+        "shop": "粘贴淘宝/天猫店铺链接，如：https://shop xxx.taobao.com/",
+        "shop_label": "店铺链接:",
     },
     "jd": {
         "keyword": "输入京东搜索关键词，如：小米14",
@@ -296,6 +307,12 @@ PLATFORM_HINTS = {
         "link_label": "商品链接:",
     },
 }
+
+# 支持“店铺采集”的平台（其余平台店铺页结构复杂或风控强，暂不开放）
+SHOP_SUPPORTED = {"1688", "taobao", "xianyu"}
+
+# 支持“最低想要/热度”筛选的平台（淘宝/京东该字段恒为0，过滤会误删全部结果）
+WANTS_SUPPORTED = {"1688", "pdd", "xianyu"}
 
 
 class CollectTab(QWidget):
@@ -366,15 +383,18 @@ class CollectTab(QWidget):
 
         self.keyword_radio = QRadioButton("🔍 关键词搜索采集")
         self.homepage_radio = QRadioButton("🔗 商品链接直采")
+        self.shop_radio = QRadioButton("🏬 店铺采集（采集整店在售商品）")
         self.keyword_radio.setChecked(True)
 
         self.mode_btn_group = QButtonGroup(self)
         self.mode_btn_group.addButton(self.keyword_radio, 0)
         self.mode_btn_group.addButton(self.homepage_radio, 1)
+        self.mode_btn_group.addButton(self.shop_radio, 2)
         self.mode_btn_group.idToggled.connect(self._on_mode_changed)
 
         mode_layout.addWidget(self.keyword_radio)
         mode_layout.addWidget(self.homepage_radio)
+        mode_layout.addWidget(self.shop_radio)
         layout.addWidget(mode_group)
 
         # ── 采集参数 ──
@@ -429,18 +449,13 @@ class CollectTab(QWidget):
         self.min_sales_spin.setMinimumHeight(32)
         self.min_sales_spin.setSpecialValueText('不限')
         hot_layout.addWidget(self.min_sales_spin)
-        hot_layout.addWidget(QLabel('最低想要/热度:'))
+        self.min_wants_label = QLabel('最低想要/热度:')
+        hot_layout.addWidget(self.min_wants_label)
         self.min_wants_spin = QSpinBox()
         self.min_wants_spin.setRange(0, 9999999)
         self.min_wants_spin.setMinimumHeight(32)
         self.min_wants_spin.setSpecialValueText('不限')
         hot_layout.addWidget(self.min_wants_spin)
-        hot_layout.addWidget(QLabel('最低浏览量:'))
-        self.min_views_spin = QSpinBox()
-        self.min_views_spin.setRange(0, 99999999)
-        self.min_views_spin.setMinimumHeight(32)
-        self.min_views_spin.setSpecialValueText('不限')
-        hot_layout.addWidget(self.min_views_spin)
         hot_layout.addStretch()
         param_layout.addLayout(hot_layout)
 
@@ -451,7 +466,6 @@ class CollectTab(QWidget):
         self.sort_combo.addItem('价格', 'price')
         self.sort_combo.addItem('销量', 'sales')
         self.sort_combo.addItem('想要/热度', 'wants')
-        self.sort_combo.addItem('浏览量', 'views')
         self.sort_combo.setMinimumHeight(32)
         sort_layout.addWidget(self.sort_combo)
         self.order_combo = QComboBox()
@@ -531,11 +545,30 @@ class CollectTab(QWidget):
 
         layout.addStretch()
 
+        # 按当前平台同步店铺采集/想要筛选等控件的可用状态
+        self._on_platform_changed()
+
     def _on_platform_changed(self):
         platform = self.platform_combo.currentData()
         hints = PLATFORM_HINTS.get(platform, PLATFORM_HINTS["xianyu"])
-        mode = "keyword" if self.keyword_radio.isChecked() else "link"
-        self.input_field.setPlaceholderText(hints[mode])
+        # 店铺采集仅部分平台支持；不支持时禁用并回退到关键词
+        shop_ok = platform in SHOP_SUPPORTED
+        self.shop_radio.setEnabled(shop_ok)
+        if not shop_ok and self.shop_radio.isChecked():
+            self.keyword_radio.setChecked(True)
+        if self.keyword_radio.isChecked():
+            mode = "keyword"
+        elif self.shop_radio.isChecked():
+            mode = "shop"
+        else:
+            mode = "link"
+        self.input_field.setPlaceholderText(hints.get(mode, hints["keyword"]))
+        # “最低想要/热度”仅部分平台有效（淘宝/京东该字段恒为0）
+        wants_ok = platform in WANTS_SUPPORTED
+        self.min_wants_label.setEnabled(wants_ok)
+        self.min_wants_spin.setEnabled(wants_ok)
+        if not wants_ok:
+            self.min_wants_spin.setValue(0)
         # 重置登录状态
         self.login_status_label.setText("🔘 未检查")
         self.login_status_label.setStyleSheet("color: #999; font-size: 13px; padding: 2px 8px;")
@@ -610,6 +643,10 @@ class CollectTab(QWidget):
         if btn_id == 0:
             self.input_label.setText("关键词:")
             self.input_field.setPlaceholderText(hints["keyword"])
+        elif btn_id == 2:
+            self.input_label.setText("店铺链接:")
+            self.input_field.setPlaceholderText(
+                hints.get("shop", "粘贴店铺链接"))
         else:
             self.input_label.setText(hints.get("link_label", "商品链接:"))
             self.input_field.setPlaceholderText(hints["link"])
@@ -625,10 +662,8 @@ class CollectTab(QWidget):
             f["max_price"] = float(mx)
         if self.min_sales_spin.value() > 0:
             f["min_sales"] = float(self.min_sales_spin.value())
-        if self.min_wants_spin.value() > 0:
+        if self.min_wants_spin.isEnabled() and self.min_wants_spin.value() > 0:
             f["min_wants"] = float(self.min_wants_spin.value())
-        if self.min_views_spin.value() > 0:
-            f["min_views"] = float(self.min_views_spin.value())
         sort_by = self.sort_combo.currentData()
         if sort_by:
             f["sort_by"] = sort_by
@@ -645,10 +680,8 @@ class CollectTab(QWidget):
             parts.append(f"销量≥{int(f['min_sales'])}")
         if "min_wants" in f:
             parts.append(f"想要≥{int(f['min_wants'])}")
-        if "min_views" in f:
-            parts.append(f"浏览≥{int(f['min_views'])}")
         if f.get("sort_by"):
-            label = {"price": "价格", "sales": "销量", "wants": "想要", "views": "浏览"}.get(f["sort_by"], f["sort_by"])
+            label = {"price": "价格", "sales": "销量", "wants": "想要"}.get(f["sort_by"], f["sort_by"])
             arrow = "↑" if f.get("order") == "asc" else "↓"
             parts.append(f"按{label}{arrow}排序")
         return " | ".join(parts) if parts else "无"
@@ -659,14 +692,19 @@ class CollectTab(QWidget):
             return
 
         platform = self.platform_combo.currentData()
-        mode = "keyword" if self.keyword_radio.isChecked() else "homepage"
+        if self.keyword_radio.isChecked():
+            mode = "keyword"
+        elif self.shop_radio.isChecked():
+            mode = "shop"
+        else:
+            mode = "homepage"
         value = self.input_field.text().strip()
 
         if not value:
             QMessageBox.warning(self, "提示", "请输入关键词或商品链接")
             return
 
-        if mode == "homepage" and not is_valid_url(value):
+        if mode in ("homepage", "shop") and not is_valid_url(value):
             platform_examples = {
                 "xianyu": "https://www.goofish.com/item?id=xxx",
                 "pdd": "https://mobile.yangkeduo.com/goods.html?goods_id=xxx",

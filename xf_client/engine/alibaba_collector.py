@@ -575,6 +575,14 @@ class AlibabaCollector:
             self._log("⚠️  搜索页跳转到登录页，登录态已失效")
             return []
 
+        return self._harvest_offer_links(tab, count)
+
+    def _harvest_offer_links(self, tab, count: int) -> list[str]:
+        """在当前页面(搜索结果/店铺列表)滚动加载并抽取 1688 商品详情链接。
+
+        搜索页与店铺铺货页的商品链接形态一致(offer/123.html 或 ?offerId=123),
+        故搜索采集与店铺采集共用本方法, 只是调用方负责先把页面导航到位。
+        """
         links = []
         seen = set()
         last_height = 0
@@ -1162,5 +1170,105 @@ class AlibabaCollector:
             return self.items
         except Exception as e:
             raise Exception(f"1688批量采集失败: {e}")
+        finally:
+            self._close_browser()
+
+    def _collect_shop_links(self, shop_url: str, count: int) -> list[str]:
+        """导航到 1688 店铺铺货页并抽取商品详情链接。
+
+        店铺链接形态多样(winport 主页/供应列表页等)，统一策略：
+        先打开给定 URL 滚动抓链接；若过少，再尝试常见的铺货列表路径。
+        """
+        tab = self._safe_tab()
+        self._log(f"正在打开店铺: {shop_url}")
+        tab.get(shop_url)
+        time.sleep(4)
+
+        current_url = tab.url or ""
+        if "login.taobao.com" in current_url or "login.1688.com" in current_url:
+            self._log("⚠️  店铺页跳转到登录页，登录态已失效")
+            return []
+
+        links = self._harvest_offer_links(tab, count)
+
+        # 链接过少时，尝试店铺“供应/全部商品”列表页(winport offer_list)。
+        if len(links) < count:
+            m = re.match(r"https?://([^/.]+)\.1688\.com", shop_url)
+            candidates = []
+            if m:
+                prefix = m.group(1)
+                candidates = [
+                    f"https://{prefix}.1688.com/page/offerlist.htm",
+                    f"https://{prefix}.1688.com/page/offerlist_1.htm",
+                ]
+            for cand in candidates:
+                if len(links) >= count:
+                    break
+                try:
+                    self._log(f"尝试店铺铺货页: {cand}")
+                    tab.get(cand)
+                    time.sleep(3)
+                    more = self._harvest_offer_links(tab, count)
+                    for u in more:
+                        if u not in links:
+                            links.append(u)
+                except Exception as e:
+                    self._log(f"  铺货页打开失败: {e}")
+        return links[:count]
+
+    def collect_by_shop(self, shop_url: str, count: int = 50, on_item=None) -> list:
+        """店铺采集：打开店铺铺货页，抓取商品链接后逐个采集详情。
+
+        Args:
+            shop_url: 1688 店铺主页/铺货页 URL
+            count: 目标采集数量
+            on_item(index, total, item): 可选进度回调
+        """
+        try:
+            self._init_browser()
+            self.items = []
+            self.seen_ids = set()
+            self.seen_img_md5 = set()
+            self.seen_img_dhash = []
+
+            if not self._ensure_login():
+                raise Exception("登录超时，请重新运行并完成登录")
+
+            links = self._collect_shop_links(shop_url, count)
+            if not links:
+                self._log("⚠️  未从店铺页找到商品链接（可能登录态失效或店铺页结构不支持）")
+                return []
+
+            self._log(f"店铺共发现 {len(links)} 个商品，开始逐个采集详情...")
+            total = len(links)
+            for i, link in enumerate(links):
+                item_id = self._extract_item_id(link)
+                if item_id in self.seen_ids:
+                    continue
+                self.seen_ids.add(item_id)
+                # 每个商品独立重置图片去重池，避免跨商品误删同款图
+                self.seen_img_md5 = set()
+                self.seen_img_dhash = []
+                self._log(f"采集 {i + 1}/{total}: {item_id}")
+                try:
+                    item = self._scrape_detail_page(link)
+                except Exception as e:
+                    self._log(f"  ✗ 采集异常 [{link}]: {e}")
+                    item = None
+                if item:
+                    self.items.append(item)
+                    if on_item:
+                        try:
+                            on_item(i + 1, total, item)
+                        except Exception:
+                            pass
+                else:
+                    self._log("  ✗ 采集失败，跳过")
+                time.sleep(random.uniform(1.5, 3.0))
+
+            self._log(f"1688店铺采集完成，共 {len(self.items)} 个商品")
+            return self.items
+        except Exception as e:
+            raise Exception(f"1688店铺采集失败: {e}")
         finally:
             self._close_browser()

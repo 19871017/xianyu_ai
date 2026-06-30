@@ -10,6 +10,64 @@ except Exception:
     PACKAGE_ATTR_KEY = '_full_product_package'
 
 
+import shutil
+
+
+def _iter_local_image_dirs(product: Dict) -> set:
+    """从商品记录中收集“本软件托管”的本地图片目录（用于级联删除）。
+
+    安全约束：只返回路径中包含 ``images`` 这一层的“按商品归档”目录
+    （形如 ``.../电商数据/images/{item_id}/``）。用户自行导入的素材目录
+    （如 ``~/Downloads/xxx``）不含 images 归档层，不会被纳入，避免误删。
+    """
+    dirs = set()
+
+    def _consider(path: str):
+        if not path or not isinstance(path, str):
+            return
+        norm = os.path.normpath(path)
+        parts = norm.split(os.sep)
+        if "images" not in parts:
+            return
+        idx = parts.index("images")
+        # images 之后必须还有一层“商品目录”才纳入（避免删除整个 images 根）
+        if idx + 1 >= len(parts):
+            return
+        item_dir = os.sep.join(parts[: idx + 2])
+        dirs.add(item_dir)
+
+    for img in (product.get("local_images") or []):
+        if isinstance(img, str):
+            _consider(os.path.dirname(img))
+    for key in ("image_dir", "source_dir"):
+        val = product.get(key)
+        if isinstance(val, str):
+            _consider(val)
+    # 商品包内嵌字段
+    attrs = product.get("attributes")
+    if isinstance(attrs, dict):
+        pkg = attrs.get(PACKAGE_ATTR_KEY)
+        if isinstance(pkg, dict):
+            for key in ("image_dir", "source_dir"):
+                val = pkg.get(key)
+                if isinstance(val, str):
+                    _consider(val)
+    return dirs
+
+
+def _safe_remove_dirs(dirs) -> int:
+    """删除给定目录集合，返回成功删除的数量。仅删除存在的目录，异常不抛出。"""
+    removed = 0
+    for d in dirs:
+        try:
+            if d and os.path.isdir(d):
+                shutil.rmtree(d)
+                removed += 1
+        except Exception:
+            pass
+    return removed
+
+
 DB_PATH = os.path.join(os.path.expanduser("~"), ".xf_data", "data.db")
 
 
@@ -349,9 +407,19 @@ class DatabaseManager:
                 (str(xianyu_item_id), datetime.now().isoformat(), product_id),
             )
 
-    def delete_product(self, product_id: int):
+    def delete_product(self, product_id: int, remove_local: bool = False) -> int:
+        """删除商品记录。remove_local=True 时同时删除该商品托管的本地图片目录。
+
+        返回删除的本地目录数量（remove_local=False 时恒为 0）。
+        """
+        local_dirs = set()
+        if remove_local:
+            product = self.get_product_by_id(product_id)
+            if product:
+                local_dirs = _iter_local_image_dirs(product)
         with self._get_conn() as conn:
             conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+        return _safe_remove_dirs(local_dirs) if remove_local else 0
 
     def _row_to_product(self, row: sqlite3.Row) -> Dict:
         attrs = json.loads(row["attributes"] or "{}")
@@ -725,6 +793,97 @@ class DatabaseManager:
                 "DELETE FROM source_rechecks WHERE checked_at < datetime('now', ?)",
                 (f'-{int(before_days)} days',),
             )
+
+    # ═══════════════════ 历史数据删除 / 统计 ═══════════════════
+
+    def delete_products(self, product_ids: list, remove_local: bool = False) -> dict:
+        """批量删除商品。remove_local=True 时级联删除托管的本地图片目录。
+
+        返回 {"products": 删除条数, "local_dirs": 删除本地目录数}。
+        """
+        ids = [int(i) for i in (product_ids or []) if i is not None]
+        if not ids:
+            return {"products": 0, "local_dirs": 0}
+        local_dirs = set()
+        if remove_local:
+            for pid in ids:
+                product = self.get_product_by_id(pid)
+                if product:
+                    local_dirs |= _iter_local_image_dirs(product)
+        with self._get_conn() as conn:
+            qmarks = ",".join("?" * len(ids))
+            cur = conn.execute(
+                f"DELETE FROM products WHERE id IN ({qmarks})", ids
+            )
+            deleted = cur.rowcount
+        removed = _safe_remove_dirs(local_dirs) if remove_local else 0
+        return {"products": deleted, "local_dirs": removed}
+
+    def clear_products(self, remove_local: bool = False) -> dict:
+        """清空全部商品。remove_local=True 时级联删除托管的本地图片目录。"""
+        local_dirs = set()
+        deleted = 0
+        with self._get_conn() as conn:
+            if remove_local:
+                rows = conn.execute("SELECT * FROM products").fetchall()
+                for row in rows:
+                    local_dirs |= _iter_local_image_dirs(self._row_to_product(row))
+            cur = conn.execute("DELETE FROM products")
+            deleted = cur.rowcount
+        removed = _safe_remove_dirs(local_dirs) if remove_local else 0
+        return {"products": deleted, "local_dirs": removed}
+
+    def clear_orders(self) -> int:
+        with self._get_conn() as conn:
+            cur = conn.execute("DELETE FROM orders")
+            return cur.rowcount
+
+    def clear_collect_records(self) -> int:
+        with self._get_conn() as conn:
+            cur = conn.execute("DELETE FROM collect_records")
+            return cur.rowcount
+
+    def clear_all_monitor_snapshots(self, platform: str = None) -> int:
+        with self._get_conn() as conn:
+            if platform:
+                cur = conn.execute(
+                    "DELETE FROM monitor_snapshots WHERE platform = ?", (platform,)
+                )
+            else:
+                cur = conn.execute("DELETE FROM monitor_snapshots")
+            return cur.rowcount
+
+    def clear_all_rechecks(self) -> int:
+        with self._get_conn() as conn:
+            cur = conn.execute("DELETE FROM source_rechecks")
+            return cur.rowcount
+
+    def clear_scheduled_tasks(self) -> int:
+        with self._get_conn() as conn:
+            cur = conn.execute("DELETE FROM scheduled_tasks")
+            return cur.rowcount
+
+    def data_counts(self) -> dict:
+        """各历史数据表的当前条数，用于“数据管理”界面展示。"""
+        tables = {
+            "products": "products",
+            "orders": "orders",
+            "collect_records": "collect_records",
+            "monitor_snapshots": "monitor_snapshots",
+            "source_rechecks": "source_rechecks",
+            "scheduled_tasks": "scheduled_tasks",
+        }
+        out = {}
+        with self._get_conn() as conn:
+            for key, tbl in tables.items():
+                try:
+                    out[key] = conn.execute(
+                        f"SELECT COUNT(*) AS c FROM {tbl}"
+                    ).fetchone()["c"]
+                except Exception:
+                    out[key] = 0
+        return out
+
 
 
 # 全局数据库实例

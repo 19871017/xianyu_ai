@@ -508,6 +508,14 @@ class TaobaoCollector:
             self._log("⚠️  搜索页跳转到登录页，登录态已失效")
             return []
 
+        return self._harvest_item_links(tab, count)
+
+    def _harvest_item_links(self, tab, count: int) -> list[str]:
+        """在当前页面(搜索结果/店铺宝贝页)滚动加载并抽取淘宝商品详情链接。
+
+        搜索页与店铺页的商品链接形态一致(item.htm?id=xxx),
+        故搜索采集与店铺采集共用本方法，调用方负责先把页面导航到位。
+        """
         links = []
         seen = set()
         last_height = 0
@@ -905,6 +913,69 @@ class TaobaoCollector:
             return self.items
         except Exception as e:
             raise Exception(f"淘宝批量采集失败: {e}")
+        finally:
+            self._close_browser()
+
+    def collect_by_shop(self, shop_url: str, count: int = 50, on_item=None) -> list:
+        """店铺采集：打开淘宝/天猫店铺页，滚动抽取在售商品链接后逐个采集详情。
+
+        支持卖家旺铺/店铺搜索页等列表形态。商品链接形态与搜索页一致
+        (item.htm?id=xxx)，故复用 _harvest_item_links 抽链接。
+        """
+        try:
+            self._init_browser()
+            self.items = []
+            self.seen_ids = set()
+            self.seen_img_md5 = set()
+            self.seen_img_dhash = []
+
+            if not self._ensure_login():
+                raise Exception("登录超时，请重新运行并完成登录")
+
+            self._log(f"正在打开淘宝店铺: {shop_url}")
+            tab = self._safe_tab()
+            tab.get(shop_url)
+            time.sleep(5)
+            current_url = tab.url or ""
+            if "login.taobao.com" in current_url:
+                self._log("⚠️  店铺页跳转到登录页，登录态已失效")
+                return []
+
+            links = self._harvest_item_links(tab, count)
+            if not links:
+                self._log("⚠️  未在店铺页找到商品链接（可能页面改版或需先进入'全部宝贝'）")
+                return []
+
+            self._log(f"店铺找到 {len(links)} 个商品，开始逐个采集详情...")
+            total = len(links)
+            for i, link in enumerate(links):
+                item_id = self._extract_item_id(link)
+                if item_id in self.seen_ids:
+                    continue
+                self.seen_ids.add(item_id)
+                self.seen_img_md5 = set()
+                self.seen_img_dhash = []
+                self._log(f"采集 {i+1}/{total}: {item_id}")
+                try:
+                    item = self._scrape_detail_page(link)
+                except Exception as e:
+                    self._log(f"  ✗ 采集异常: {e}")
+                    item = None
+                if item:
+                    self.items.append(item)
+                    if on_item:
+                        try:
+                            on_item(i + 1, total, item)
+                        except Exception:
+                            pass
+                else:
+                    self._log("  ✗ 采集失败，跳过")
+                time.sleep(random.uniform(1.0, 2.0))
+
+            self._log(f"淘宝店铺采集完成，共 {len(self.items)} 个商品")
+            return self.items
+        except Exception as e:
+            raise Exception(f"淘宝店铺采集失败: {e}")
         finally:
             self._close_browser()
 
