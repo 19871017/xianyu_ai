@@ -1,4 +1,4 @@
-"""定时调度 Tab：管理周期任务（源复检 / 采集 / 闲鱼擦亮）。
+"""定时调度 Tab：管理周期任务（源复检 / 采集 / 闲鱼擦亮 / 抓单提醒）。
 
 设计要点：
   - 任务配置落库（scheduled_tasks 表），增删改 / 启停由本 Tab 操作。
@@ -31,6 +31,7 @@ TASK_TYPE_LABELS = {
     "recheck": "源商品复检",
     "collect": "链接采集",
     "polish": "闲鱼擦亮",
+    "fetch_orders": "抓单提醒",
 }
 TASK_TYPE_VALUES = {v: k for k, v in TASK_TYPE_LABELS.items()}
 
@@ -58,6 +59,8 @@ class TaskRunWorker(QThread):
                 ok, summary = self._run_collect(log)
             elif ttype == "polish":
                 ok, summary = self._run_polish(log)
+            elif ttype == "fetch_orders":
+                ok, summary = self._run_fetch_orders(log)
             else:
                 ok, summary = False, f"未知任务类型：{ttype}"
         except Exception as e:
@@ -155,6 +158,64 @@ class TaskRunWorker(QThread):
         finally:
             refresher.close()
         return bool(res.get("ok")) or res.get("found", 0) == 0, res.get("note", "")
+
+    def _run_fetch_orders(self, log):
+        # 后台抓取闲鱼卖出订单 → 匹配源商品 → 落库；发现新订单弹通知+语音提醒。
+        from engine.order_tracker import (
+            XianyuOrderTracker, match_order_to_product, build_reorder_plan,
+        )
+        from utils.notifier import detect_new_orders, alert_new_orders
+
+        products = db.get_all_products()
+        tracker = XianyuOrderTracker(on_log=log)
+        if not tracker.open(timeout=300):
+            return False, "闲鱼登录失败，抓单中止"
+        try:
+            orders = tracker.fetch_sold_orders()
+        finally:
+            tracker.close()
+
+        saved = 0
+        for od in orders:
+            product = match_order_to_product(od, products)
+            plan = build_reorder_plan(od, product) if product else None
+            match_status = "unmatched"
+            source_url = source_sku_id = source_platform = ""
+            if product and plan:
+                source_url = plan.get("source_url", "")
+                source_sku_id = plan.get("source_sku_id", "")
+                source_platform = plan.get("source_platform", "")
+                if plan.get("ok") and plan.get("spec_score", 0) >= 0.99:
+                    match_status = "matched"
+                else:
+                    match_status = "need_review"
+            try:
+                db.save_order({
+                    "product_id": product.get("db_id") if product else None,
+                    "platform_order_id": od.get("platform_order_id", ""),
+                    "platform": "xianyu",
+                    "buyer_name": od.get("buyer_name", ""),
+                    "buyer_phone": od.get("buyer_phone", ""),
+                    "buyer_address": od.get("buyer_address", ""),
+                    "order_status": od.get("order_status", "pending"),
+                    "order_amount": od.get("order_amount", ""),
+                    "buyer_spec": od.get("buyer_spec", ""),
+                    "quantity": od.get("quantity", 1),
+                    "source_platform": source_platform,
+                    "source_url": source_url,
+                    "source_item_id": od.get("xianyu_item_id", ""),
+                    "source_sku_id": source_sku_id,
+                    "match_status": match_status,
+                })
+                saved += 1
+            except Exception as e:
+                log(f"  订单落库失败：{e}")
+
+        new_count = detect_new_orders(orders)
+        if new_count > 0:
+            log(f"🔔 检测到 {new_count} 个新订单，已语音提醒。")
+            alert_new_orders(new_count)
+        return True, f"抓单 {len(orders)} 条，落库 {saved}，新增 {new_count}"
 
 
 class TaskDialog(QDialog):
@@ -269,7 +330,7 @@ class SchedulerTab(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
 
         tip = QLabel(
-            "定时调度：让源复检、链接采集、闲鱼擦亮按计划自动运行。\n"
+            "定时调度：让源复检、链接采集、闲鱼擦亮、抓单提醒按计划自动运行。\n"
             "调度在软件运行期生效（关闭软件则暂停）；同一时刻只跑一个任务，"
             "避免多个浏览器会话互相抢登录态。擦亮带安全护栏，绝不下架/删除商品。"
         )

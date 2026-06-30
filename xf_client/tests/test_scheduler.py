@@ -100,6 +100,11 @@ class TestValidateTask(unittest.TestCase):
                            "daily_time": "08:30"})
         self.assertTrue(r["ok"])
 
+    def test_valid_fetch_orders(self):
+        r = validate_task({"task_type": "fetch_orders", "trigger": "interval",
+                           "interval_minutes": 30})
+        self.assertTrue(r["ok"])
+
     def test_bad_type(self):
         r = validate_task({"task_type": "xxx", "trigger": "interval",
                            "interval_minutes": 30})

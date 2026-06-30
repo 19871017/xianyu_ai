@@ -15,7 +15,7 @@ from typing import Any
 
 
 VALID_TRIGGERS = ("interval", "daily")
-VALID_TASK_TYPES = ("recheck", "collect", "polish")
+VALID_TASK_TYPES = ("recheck", "collect", "polish", "fetch_orders")
 
 
 def _parse_dt(value: Any) -> datetime | None:
