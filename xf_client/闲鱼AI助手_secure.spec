@@ -99,44 +99,71 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name='闲鱼AI助手',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=EXE_ICON,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name='闲鱼AI助手',
-)
-app = BUNDLE(
-    coll,
-    name='闲鱼AI助手.app',
-    icon=ICNS_PATH,
-    bundle_identifier='com.xianyu.aihelper',
-    version=APP_VERSION,
-    info_plist={
-        'CFBundleShortVersionString': APP_VERSION,
-        'CFBundleVersion': APP_VERSION,
-        'CFBundleDisplayName': '闲鱼AI助手',
-        'NSHumanReadableCopyright': '闲鱼AI助手 v' + APP_VERSION,
-        'NSHighResolutionCapable': True,
-    },
-)
+# ── 按平台分支 ──────────────────────────────────────────────
+# Windows：onefile 单文件 exe（binaries/datas 全部打进 exe），
+#          客户双击即用，无需附带 _internal 文件夹。
+# macOS：  onedir + .app bundle（Qt 框架含大量符号链接，
+#          单文件模式会破坏 .app 结构，故 mac 仍用目录模式）。
+if _sys.platform.startswith('win'):
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name='闲鱼AI助手',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=EXE_ICON,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='闲鱼AI助手',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=EXE_ICON,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name='闲鱼AI助手',
+    )
+    app = BUNDLE(
+        coll,
+        name='闲鱼AI助手.app',
+        icon=ICNS_PATH,
+        bundle_identifier='com.xianyu.aihelper',
+        version=APP_VERSION,
+        info_plist={
+            'CFBundleShortVersionString': APP_VERSION,
+            'CFBundleVersion': APP_VERSION,
+            'CFBundleDisplayName': '闲鱼AI助手',
+            'NSHumanReadableCopyright': '闲鱼AI助手 v' + APP_VERSION,
+            'NSHighResolutionCapable': True,
+        },
+    )

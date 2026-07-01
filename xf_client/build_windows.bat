@@ -81,34 +81,33 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM 整理输出
+REM 整理输出（onefile 单文件模式：产物为 dist\闲鱼AI助手.exe）
 echo.
 echo 整理输出...
-if exist "dist\闲鱼AI助手" (
+if exist "dist\闲鱼AI助手.exe" (
     if exist "output" rmdir /s /q output
     mkdir output
-    xcopy /E /I /Y "dist\闲鱼AI助手" "output\闲鱼AI助手" >nul
+    copy /Y "dist\闲鱼AI助手.exe" "output\闲鱼AI助手.exe" >nul
     (
     echo 闲鱼采集上架助手 使用说明
     echo ========================
     echo.
-    echo 1. 进入 output\闲鱼AI助手 目录
-    echo 2. 双击 闲鱼AI助手.exe 运行
-    echo 3. 首次运行会较慢，请耐心等待
-    echo 4. 请先在"设置"页面激活 License
-    echo 5. 在"设置"页面配置 AI API（兼容 OpenAI 格式中转）
-    echo 6. 采集功能需要已安装 Chrome 浏览器
-    echo 7. 如被杀毒软件误报，请添加白名单
+    echo 1. 双击 闲鱼AI助手.exe 直接运行（单文件，无需解压附带文件夹）
+    echo 2. 首次运行会较慢（自解压），请耐心等待
+    echo 3. 请先在"设置"页面激活 License
+    echo 4. 在"设置"页面配置 AI API（兼容 OpenAI 格式中转）
+    echo 5. 采集功能需要已安装 Chrome 浏览器
+    echo 6. 如被杀毒软件误报，请添加白名单
     echo.
     echo 注：本版本核心模块已编译为原生扩展(.pyd)，不含可读源码。
     ) > "output\使用说明.txt"
     echo.
     echo ========================================
-    echo   打包成功（加密）！输出: output\闲鱼AI助手\
+    echo   打包成功（加密·单文件）！输出: output\闲鱼AI助手.exe
     echo ========================================
     dir output\
 ) else (
-    echo [错误] 未找到打包产物 dist\闲鱼AI助手
+    echo [错误] 未找到打包产物 dist\闲鱼AI助手.exe
     pause
     exit /b 1
 )
