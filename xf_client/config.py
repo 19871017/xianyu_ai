@@ -98,8 +98,8 @@ PLATFORM_URLS = {
         "home":      "https://goofish.pro/",
         "login":     "https://goofish.pro/login",
         "publish":   "https://goofish.pro/sale/product/add",
-        "products":  "https://goofish.pro/sale/product/index",
-        "orders":    "https://goofish.pro/sale/order/index",
+        "products":  "https://goofish.pro/sale/product/all",
+        "orders":    "https://goofish.pro/sale/order/all",
         "dashboard": "https://goofish.pro/sale/statistics",
     },
 }

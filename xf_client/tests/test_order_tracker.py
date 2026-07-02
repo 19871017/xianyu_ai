@@ -154,5 +154,51 @@ class TestReorderPlan(unittest.TestCase):
         self.assertIn("人工核对", plan["note"])
 
 
+
+class TestGofishproRowShape(unittest.TestCase):
+    """闲管家订单表格行（JS 抽取出的原始 dict）→ normalize → 匹配 → 代采计划。
+
+    验证 GofishproOrderTracker._extract_orders_js 产出的键名
+    (order_id/buyer_name/title/spec/order_amount/order_status) 能被完整消费。
+    """
+
+    def _row(self, **kw):
+        # 模拟 JS 抽取出的一行闲管家订单。
+        base = {
+            "order_id": "2610700000000001",
+            "buyer_name": "买家昵称A",
+            "title": "马年冰箱贴福字磁吸贴",
+            "spec": "福字红色",
+            "order_amount": "¥15.60",
+            "order_status": "待发货",
+            "image": "https://img.example.com/a.jpg",
+            "raw": {"text": "整行文本"},
+        }
+        base.update(kw)
+        return base
+
+    def test_normalize_maps_all_fields(self):
+        od = normalize_order(self._row())
+        self.assertEqual(od["platform_order_id"], "2610700000000001")
+        self.assertEqual(od["buyer_name"], "买家昵称A")
+        self.assertEqual(od["title"], "马年冰箱贴福字磁吸贴")
+        self.assertEqual(od["buyer_spec"], "福字红色")
+        self.assertEqual(od["order_amount"], "15.60")
+        self.assertEqual(od["order_status"], "待发货")
+
+    def test_full_pipeline_from_gofishpro_row(self):
+        od = normalize_order(self._row())
+        prod = match_order_to_product(od, [_product()])
+        self.assertIsNotNone(prod)
+        plan = build_reorder_plan(od, prod)
+        self.assertTrue(plan["ok"])
+        self.assertEqual(plan["source_platform"], "1688")
+        self.assertEqual(plan["source_sku_id"], "5196460270576")
+
+    def test_empty_row_list_is_safe(self):
+        # 空店铺/无订单：normalize 空行不应抛异常。
+        self.assertEqual(normalize_order({})["platform_order_id"], "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

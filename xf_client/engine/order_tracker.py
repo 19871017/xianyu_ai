@@ -328,3 +328,140 @@ class XianyuOrderTracker:
         except Exception as e:
             self.log(f"订单抽取异常: {e}")
             return []
+
+
+# ─────────────────── 闲管家(goofish.pro)卖家订单抓取 ───────────────────
+
+class GofishproOrderTracker:
+    """闲管家(goofish.pro) 卖家订单抓取（只读，不下单/不支付）。
+
+    闲鱼官方网页版已下线卖家订单页(goofish.com/sold 返回 404)，改用闲管家
+    ``/sale/order/all`` 抓单。该页为标准 <table>，免费账号即可查看，字段含
+    买家昵称/商品标题/规格/金额/状态/各时间，规格用于回溯源头 SKU。
+
+    列表页不含收货地址（需进订单详情才有），代采填地址时再按需补抓。
+    """
+
+    def __init__(self, on_log: Callable[[str], None] | None = None):
+        self.log = on_log or (lambda m: None)
+        self.browser = None
+        self.tab = None
+
+    def open(self, timeout: int = 600) -> bool:
+        res = ensure_login("goofishpro", on_log=self.log, timeout=timeout)
+        if not res["ok"]:
+            self.log(f"闲管家登录失败: {res.get('error')}")
+            return False
+        self.browser = res["browser"]
+        self.tab = res["tab"]
+        return True
+
+    def close(self):
+        if self.browser:
+            try:
+                self.browser.quit()
+            except Exception:
+                pass
+            self.browser = None
+            self.tab = None
+
+    def fetch_sold_orders(self, max_wait: int = 15) -> list[dict[str, Any]]:
+        """抓取闲管家卖家订单列表，返回规整后的订单 dict 列表。"""
+        if not self.tab:
+            self.log("浏览器未就绪，请先 open()")
+            return []
+        url = PLATFORM_URLS["goofishpro"].get("orders") or "https://goofish.pro/sale/order/all"
+        try:
+            self.tab.get(url)
+        except Exception as e:
+            self.log(f"打开闲管家订单页失败: {e}")
+            return []
+
+        # 等表格渲染（Ant/El 表格异步加载）：出现表头或「暂无数据」即停。
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            try:
+                ready = self.tab.run_js(
+                    "return !!document.querySelector('table') && "
+                    "(document.body.innerText.indexOf('订单编号')>=0 || "
+                    "document.body.innerText.indexOf('暂无数据')>=0);"
+                )
+            except Exception:
+                ready = False
+            if ready:
+                break
+            time.sleep(0.6)
+
+        raw_list = self._extract_orders_js()
+        orders = [normalize_order(r) for r in raw_list if isinstance(r, dict)]
+        self.log(f"闲管家订单抓取：{len(orders)} 条")
+        return orders
+
+    def _extract_orders_js(self) -> list[dict[str, Any]]:
+        """从闲管家订单表格按表头列名抽取每行订单。
+
+        表头随版本可能增删列，故按「列名文本 → 列索引」动态映射，不写死顺序。
+        """
+        js = r"""
+        function norm(s){ return (s||'').replace(/\s+/g,'').trim(); }
+        // 找到含「订单编号」表头的那张表。
+        var tables = document.querySelectorAll('table');
+        var target = null;
+        for (var t=0; t<tables.length; t++){
+          var htxt = (tables[t].innerText||'');
+          if (htxt.indexOf('订单编号')>=0 || htxt.indexOf('买家昵称')>=0){ target = tables[t]; break; }
+        }
+        if(!target) return [];
+        // 表头列名 → 索引。
+        var headCells = [];
+        var thead = target.querySelector('thead');
+        if (thead){
+          var ths = thead.querySelectorAll('th, td');
+          for (var i=0;i<ths.length;i++){ headCells.push(norm(ths[i].innerText)); }
+        }
+        function colIdx(names){
+          for (var i=0;i<headCells.length;i++){
+            for (var j=0;j<names.length;j++){ if (headCells[i].indexOf(names[j])>=0) return i; }
+          }
+          return -1;
+        }
+        var idxOrder = colIdx(['订单编号','订单号']);
+        var idxBuyer = colIdx(['买家昵称','买家']);
+        var idxTitle = colIdx(['商品标题','标题']);
+        var idxSpec  = colIdx(['规格']);
+        var idxRecv  = colIdx(['实收金额','实收']);
+        var idxTotal = colIdx(['商品总价','总价','金额']);
+        var idxStatus= colIdx(['订单状态','状态']);
+        var out = [];
+        var body = target.querySelector('tbody') || target;
+        var rows = body.querySelectorAll('tr');
+        for (var r=0;r<rows.length;r++){
+          var tds = rows[r].querySelectorAll('td');
+          if (!tds.length) continue;
+          function cell(ix){ return (ix>=0 && ix<tds.length) ? (tds[ix].innerText||'').trim() : ''; }
+          var order_id = cell(idxOrder);
+          var title = cell(idxTitle);
+          // 跳过空行/无标题无订单号的行。
+          if (!order_id && !title) continue;
+          var amt = cell(idxRecv) || cell(idxTotal);
+          // 商品图片：优先取该行第一张 img 的 src。
+          var img = ''; var im = rows[r].querySelector('img'); if(im) img = im.src||'';
+          out.push({
+            order_id: order_id,
+            buyer_name: cell(idxBuyer),
+            title: title,
+            spec: cell(idxSpec),
+            order_amount: amt,
+            order_status: cell(idxStatus),
+            image: img,
+            raw: {text: (rows[r].innerText||'').slice(0,300)}
+          });
+        }
+        return out;
+        """
+        try:
+            data = self.tab.run_js(js)
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            self.log(f"闲管家订单抽取异常: {e}")
+            return []

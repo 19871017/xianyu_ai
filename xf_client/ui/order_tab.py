@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QBrush
 
 from engine.order_tracker import (
-    XianyuOrderTracker,
+    GofishproOrderTracker,
     match_order_to_product,
     match_sku_for_order,
     build_reorder_plan,
@@ -32,7 +32,7 @@ GLOBAL_FONT_FAMILY = "Microsoft YaHei, PingFang SC, sans-serif"
 
 
 class FetchOrdersWorker(QThread):
-    """抓取闲鱼已售订单并就地匹配本地商品/源商品（只读，不下单）。"""
+    """抓取闲管家(goofish.pro)卖出订单并就地匹配本地商品/源商品（只读，不下单）。"""
     progress_msg = pyqtSignal(str)
     finished = pyqtSignal(list)   # list of {order, product, plan}
 
@@ -44,14 +44,14 @@ class FetchOrdersWorker(QThread):
         def log(msg):
             self.progress_msg.emit(msg)
 
-        tracker = XianyuOrderTracker(on_log=log)
+        tracker = GofishproOrderTracker(on_log=log)
         opened = False
         rows = []
         try:
-            log("正在打开闲鱼并校验登录态…")
+            log("正在打开闲管家并校验登录态…")
             opened = tracker.open()
             if not opened:
-                log("闲鱼登录失败")
+                log("闲管家登录失败")
                 self.finished.emit([])
                 return
 
@@ -152,7 +152,7 @@ class OrderTab(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
 
         tip = QLabel(
-            "卖出订单回溯代采：抓取闲鱼已售订单 → 匹配采集来源 → 半自动到 1688 下单。\n"
+            "卖出订单回溯代采：从闲管家抓取卖出订单 → 匹配采集来源 → 半自动到 1688 下单。\n"
             "⚠️ 代采只会停在「下单确认页 / 进货车」，绝不自动支付，请人工核对后手动付款。"
         )
         tip.setWordWrap(True)
@@ -161,7 +161,7 @@ class OrderTab(QWidget):
         layout.addWidget(tip)
 
         btn_row = QHBoxLayout()
-        self.fetch_btn = QPushButton("🔄 抓取闲鱼卖出订单")
+        self.fetch_btn = QPushButton("🔄 抓取闲管家卖出订单")
         self.fetch_btn.setMinimumHeight(40)
         self.fetch_btn.setStyleSheet(
             "QPushButton { background:#1565c0; color:white; border-radius:4px; "
