@@ -23,13 +23,18 @@ python main.py
 
 ## 测试 + 打包
 
-一键流程（先跑全套单元测试，通过后才打包；测试失败自动中止）：
+分发包必须走**加密打包**（核心模块 Cython 编译为原生扩展 .pyd/.so，
+杜绝明文源码与验签公钥被替换）：
 
 ```bash
-python build.py            # 测试 + 打包
-python build.py --test     # 只跑测试
-python build.py --no-test  # 跳过测试直接打包（不推荐）
+python secure_build.py            # 测试 + Cython 加密编译 + 打包（唯一正式出包方式）
+python build.py --test            # 仅跑单元测试（不产出分发包）
 ```
+
+> ⚠️ 严禁用普通 PyInstaller 直接打包（`pyinstaller 闲鱼AI助手.spec`）分发。
+> 普通打包会把 engine/license/config 以明文源码塞进包内，验签公钥可被一行
+> 替换，导致授权被绕过。普通 `build.py` 的打包路径已封禁，仅保留测试。
+> 分发包启动即校验核心模块是否为原生扩展，明文包会 fail-closed 拒用核心功能。
 
 平台产物：
 - macOS: `dist/闲鱼AI助手.app` 与 `dist/闲鱼AI助手/`

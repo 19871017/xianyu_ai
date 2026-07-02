@@ -25,7 +25,8 @@ xf_client/
 ├── requirements.txt             # Python依赖清单
 ├── run_windows.bat              # Windows直接运行脚本（无需打包exe）
 ├── build_windows.bat            # Windows PyInstaller打包脚本
-├── 闲鱼AI助手.spec              # PyInstaller spec文件（macOS用）
+├── 闲鱼AI助手.spec              # 普通 spec（仅本地调试；含明文源码，勿用于分发）
+├── 闲鱼AI助手_secure.spec       # 加密 spec（正式分发；核心模块为 .so/.pyd）
 │
 ├── engine/                      # 核心业务引擎
 │   ├── __init__.py
@@ -172,9 +173,9 @@ cd xf_client
 pip install -r requirements.txt
 python main.py
 
-# 打包.app
-pip install pyinstaller
-pyinstaller 闲鱼AI助手.spec --noconfirm
+# 打包 .app（正式分发：加密编译核心模块为原生扩展 .so）
+python secure_build.py
+# 严禁用 `pyinstaller 闲鱼AI助手.spec` 直接打包分发——那会把源码明文塞进包内。
 ```
 
 ### Windows（直接运行，推荐）
@@ -184,9 +185,11 @@ pyinstaller 闲鱼AI助手.spec --noconfirm
 4. 首次运行自动安装依赖，之后直接启动
 
 ### Windows（打包exe，可选）
-1. 同上准备Python环境
-2. 双击 `build_windows.bat`
-3. 产物在 `output/闲鱼AI助手/` 目录
+1. 安装**官方** Python 3.11（勾选 Add to PATH；勿用 uv 托管的解释器）
+2. 安装 Microsoft C++ Build Tools，在「x64 Native Tools Command Prompt for VS」中运行
+3. 双击 `build_windows.bat`（内部调用 `secure_build.py` 加密编译为 .pyd）
+4. 产物为单文件 `output/闲鱼AI助手.exe`
+5. 打包后务必冒烟：正式分发包启动会校验核心模块为原生扩展，明文包会 fail-closed 拒用核心功能
 
 ## 配置文件
 

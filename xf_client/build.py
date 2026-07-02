@@ -1,16 +1,17 @@
-"""一键测试 + 打包脚本（跨平台）。
+"""一键测试脚本 + 加密打包重定向（跨平台）。
 
-流程：
-  1. 运行全套单元测试（tests/），任一失败则中止，不进行打包。
-  2. 测试通过后调用 PyInstaller 按 闲鱼AI助手.spec 打包。
-  3. 打包产物：
-       - macOS: dist/闲鱼AI助手.app + dist/闲鱼AI助手/
-       - Windows: dist/闲鱼AI助手/闲鱼AI助手.exe
+⚠️ 安全变更（重要）：
+    旧版本 build.py 会用 `闲鱼AI助手.spec` 直接 PyInstaller 打包，把
+    engine/license/config 当作**明文源码**塞进产物。这类明文包可被一行
+    替换验签公钥而彻底破解（方案B防护形同虚设，已在 Windows 端出过事故）。
+
+    因此本脚本不再产出明文分发包。打包一律走加密流程 `secure_build.py`
+    （核心模块 Cython 编译为 .pyd/.so 原生扩展后再打包）。
 
 用法：
-    python build.py            # 测试 + 打包
-    python build.py --test     # 只测试
-    python build.py --no-test  # 跳过测试直接打包（不推荐）
+    python build.py            # 测试 + 加密打包（等价 secure_build.py）
+    python build.py --test     # 只跑测试
+    python build.py --no-test  # 跳过测试直接加密打包（不推荐）
 """
 from __future__ import annotations
 
@@ -19,43 +20,31 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SPEC = os.path.join(HERE, "闲鱼AI助手.spec")
+SECURE_BUILD = os.path.join(HERE, "secure_build.py")
 
 
 def run_tests() -> bool:
     print("=" * 60)
-    print("[1/2] 运行单元测试 …")
+    print("[1/1] 运行单元测试 …")
     print("=" * 60)
     proc = subprocess.run(
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
         cwd=HERE,
     )
     if proc.returncode != 0:
-        print("\n❌ 测试未通过，已中止打包。")
+        print("\n❌ 测试未通过。")
         return False
     print("\n✅ 测试全部通过。")
     return True
 
 
-def run_build() -> bool:
+def run_secure_build(extra_args: list[str]) -> int:
     print("=" * 60)
-    print("[2/2] PyInstaller 打包 …")
+    print("→ 重定向到加密打包 secure_build.py（防明文源码泄露/破解）")
     print("=" * 60)
-    if not os.path.exists(SPEC):
-        print(f"❌ 找不到 spec 文件: {SPEC}")
-        return False
-    proc = subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "--noconfirm", SPEC],
-        cwd=HERE,
-    )
-    if proc.returncode != 0:
-        print("\n❌ 打包失败。")
-        return False
-    out = os.path.join(HERE, "dist")
-    print(f"\n✅ 打包完成，产物目录: {out}")
-    for name in os.listdir(out) if os.path.isdir(out) else []:
-        print(f"   - {name}")
-    return True
+    return subprocess.run(
+        [sys.executable, SECURE_BUILD, *extra_args], cwd=HERE
+    ).returncode
 
 
 def main() -> int:
@@ -63,12 +52,12 @@ def main() -> int:
     only_test = "--test" in args
     skip_test = "--no-test" in args
 
-    if not skip_test:
-        if not run_tests():
-            return 1
     if only_test:
-        return 0
-    return 0 if run_build() else 1
+        return 0 if run_tests() else 1
+
+    # 打包统一交给 secure_build.py（它内部也会跑测试；--no-test 透传）。
+    extra = ["--no-test"] if skip_test else []
+    return run_secure_build(extra)
 
 
 if __name__ == "__main__":
