@@ -22,6 +22,7 @@ import requests
 from urllib.parse import quote, urlparse, parse_qs
 from DrissionPage import Chromium
 from config import IMAGE_DIR
+from license.capability_guard import require_capability
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.browser_config import get_chromium_options, check_browser_available
 from engine.taobao_sku_parser import parse_sku_from_html, extract_head_images
@@ -816,6 +817,7 @@ class TaobaoCollector:
 
     def search_by_keyword(self, keyword: str, count: int = 50) -> list:
         """关键词搜索采集"""
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -856,6 +858,7 @@ class TaobaoCollector:
 
     def collect_by_link(self, url: str) -> list:
         """单个商品链接直采"""
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -884,6 +887,7 @@ class TaobaoCollector:
         on_item(index, total, item) 可选回调，便于 UI 实时反馈进度。
         """
         urls = [u for u in (urls or []) if u]
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []

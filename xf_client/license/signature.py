@@ -62,3 +62,42 @@ def verify_license_signature(license_key: str, machine_id: str,
         return True
     except Exception:
         return False
+
+
+def build_capability_payload(action: str, machine_id: str, expire_ts) -> str:
+    """构造与服务端完全一致的能力令牌签名原文。"""
+    return f"cap:{action}:{machine_id}:{expire_ts}"
+
+
+def verify_capability_token(action: str, machine_id: str, expire_ts,
+                            token_hex: str) -> bool:
+    """校验服务端下发的能力令牌（RSA-PSS 公钥验签）。
+
+    方案B核心：采集/上架/AI改写等动作执行前，客户端须持有服务端签名的
+    短期令牌。私钥只在服务端，破解版伪造不出合法令牌。任一环节异常即判失败。
+    """
+    if not (action and machine_id and expire_ts and token_hex):
+        return False
+    # 过期即失效：签名保证攻击者伪造不出未来的到期时间，此处再拦截过期令牌重放。
+    try:
+        import time as _t
+        if int(expire_ts) < int(_t.time()):
+            return False
+    except Exception:
+        return False
+    try:
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.hazmat.primitives import hashes
+        payload = build_capability_payload(action, machine_id, expire_ts)
+        _load_public_key().verify(
+            bytes.fromhex(token_hex),
+            payload.encode("utf-8"),
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            hashes.SHA256(),
+        )
+        return True
+    except Exception:
+        return False

@@ -6,10 +6,10 @@ from datetime import datetime
 from config import (
     SERVER_URL, LICENSE_FILE, CLIENT_API_KEY,
     API_LICENSE_ACTIVATE, API_LICENSE_VERIFY, API_LICENSE_HEARTBEAT,
-    LICENSE_OFFLINE_GRACE_SECONDS,
+    API_LICENSE_CAPABILITY, LICENSE_OFFLINE_GRACE_SECONDS,
 )
 from license.machine_id import get_machine_id
-from license.signature import verify_license_signature
+from license.signature import verify_license_signature, verify_capability_token
 
 
 class LicenseValidator:
@@ -26,6 +26,8 @@ class LicenseValidator:
         self.machine_id = get_machine_id()
         self.license_data = self._load_local()
         self._server_ok = None
+        # 能力令牌短期缓存：{action: (token, expire_ts)}，减少每次动作都打网络。
+        self._cap_cache = {}
 
     # ──────────────────────── 本地存储 ────────────────────────
     def _load_local(self) -> dict:
@@ -205,6 +207,60 @@ class LicenseValidator:
         except Exception:
             # 网络异常不强制下线，交由 verify 的离线宽限处理
             return {"ok": True, "action": "continue", "reason": "offline"}
+
+    # ──────────────────────── 能力令牌（方案B） ────────────────────────
+    def acquire_capability(self, action: str) -> dict:
+        """执行受控动作前换取服务端短期签名令牌，并本地验签。
+
+        破解版客户端拿不到服务端私钥，无法伪造令牌；因此即便本地授权文件
+        被伪造、UI 显示"已激活"，核心功能仍会因拿不到有效令牌而被拒。
+
+        返回 {"ok": bool, "reason": str}。ok=True 才允许执行动作。
+        """
+        # 短期缓存命中（还剩足够余量）即复用，减少每次动作都打网络。
+        cached = self._cap_cache.get(action)
+        if cached:
+            token, expire_ts = cached
+            if expire_ts - int(time.time()) > 30 and verify_capability_token(
+                action, self.machine_id, expire_ts, token
+            ):
+                return {"ok": True, "reason": "cached"}
+
+        license_key = (self.license_data or {}).get("license_key", "")
+        if not license_key:
+            return {"ok": False, "reason": "未激活"}
+        try:
+            resp = requests.post(
+                API_LICENSE_CAPABILITY,
+                json={
+                    "license_key": license_key,
+                    "machine_id": self.machine_id,
+                    "action": action,
+                    "ts": int(time.time()),
+                },
+                headers=self._headers(),
+                timeout=10,
+            )
+        except Exception:
+            return {"ok": False, "reason": "无法连接授权服务器，核心功能需联网授权"}
+        if resp.status_code == 401:
+            return {"ok": False, "reason": "客户端密钥无效"}
+        if resp.status_code != 200:
+            return {"ok": False, "reason": f"授权服务异常 (HTTP {resp.status_code})"}
+        try:
+            data = resp.json()
+        except Exception:
+            return {"ok": False, "reason": "授权响应无法解析"}
+        if not data.get("ok"):
+            return {"ok": False, "reason": data.get("reason", "授权被拒绝")}
+
+        token = data.get("token", "")
+        expire_ts = data.get("expire_ts", 0)
+        # 关键：用内嵌公钥验签，假服务器给不出有效签名即判失败。
+        if not verify_capability_token(action, self.machine_id, expire_ts, token):
+            return {"ok": False, "reason": "能力令牌签名无效（服务器不可信）"}
+        self._cap_cache[action] = (token, int(expire_ts))
+        return {"ok": True, "reason": "online"}
 
     # ──────────────────────── 杂项 ────────────────────────
     def _device_name(self) -> str:

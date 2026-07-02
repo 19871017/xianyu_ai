@@ -24,6 +24,8 @@ API_LICENSE_VERIFY   = f"{SERVER_BASE_URL}/api/license/verify"
 API_AUTH_REGISTER    = f"{SERVER_BASE_URL}/api/auth/register"
 API_AUTH_LOGIN       = f"{SERVER_BASE_URL}/api/auth/login"
 API_LICENSE_HEARTBEAT = f"{SERVER_BASE_URL}/api/license/heartbeat"
+# 能力令牌（方案B）：执行采集/上架/AI改写等受控动作前换取的短期签名令牌端点。
+API_LICENSE_CAPABILITY = f"{SERVER_BASE_URL}/api/license/capability"
 # 公开更新检测：返回某平台最新版本（无需登录态）。platform=mac/win。
 API_PUBLIC_LATEST    = f"{SERVER_BASE_URL}/api/public/latest"
 # 下载站首页：客户端检测到新版本后，点「确定」跳转此处下载。
@@ -130,7 +132,7 @@ REQUEST_TIMEOUT = 30              # HTTP 请求超时(秒)
 BROWSER_WAIT_AFTER_NAV = 3        # 页面跳转后等待(秒)
 
 # ──────────────────────── 版本 ────────────────────────
-APP_VERSION = "3.3.0"
+APP_VERSION = "3.4.0"
 APP_NAME = "多平台电商AI助手"
 
 # ──────────────────────── 兼容别名 ────────────────────────

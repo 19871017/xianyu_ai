@@ -49,3 +49,11 @@ class LicenseInfo(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LicenseCapability(BaseModel):
+    """能力令牌请求：客户端执行受控动作（采集/上架/AI改写）前换取短期签名令牌。"""
+    license_key: str
+    machine_id: str
+    action: str
+    ts: Optional[int] = None

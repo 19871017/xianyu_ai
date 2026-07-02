@@ -84,6 +84,12 @@ OFFLINE_THRESHOLD_SECONDS = int(os.getenv("OFFLINE_THRESHOLD_SECONDS", "180"))
 REQUEST_TIMESTAMP_WINDOW_SECONDS = int(os.getenv("REQUEST_TIMESTAMP_WINDOW_SECONDS", "300"))
 # 客户端离线宽限：远程不可达时本地最多容忍的时长（秒）。
 OFFLINE_GRACE_SECONDS = int(os.getenv("OFFLINE_GRACE_SECONDS", str(72 * 3600)))
+# ──────────────────────── 能力令牌（方案B：核心功能服务端授权）────────────────────────
+# 客户端执行受控动作（采集/上架/AI改写）前，向服务端换取一次性短期 RSA 签名令牌。
+# 私钥只在服务端，破解版客户端拿不到私钥就伪造不出令牌，从而无法调用核心功能。
+CAPABILITY_TOKEN_TTL_SECONDS = int(os.getenv("CAPABILITY_TOKEN_TTL_SECONDS", "180"))
+# 允许申请的能力动作白名单（未知动作一律拒签，防止被滥用为通用签名预言机）。
+CAPABILITY_ACTIONS = {"collect", "listing", "ai_rewrite", "export", "recheck", "dashboard", "reorder"}
 
 # ──────────────────────── CORS ────────────────────────
 # 默认仅允许管理后台同源；可用逗号分隔的环境变量放开。

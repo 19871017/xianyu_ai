@@ -24,6 +24,7 @@ from typing import Any, Callable
 
 from config import PLATFORM_URLS
 from utils.login_manager import ensure_login
+from license.capability_guard import require_capability, CapabilityError
 
 
 # 1688 详情页 offer id 提取（与 alibaba_collector._extract_item_id 同源规则）。
@@ -172,6 +173,12 @@ class ReorderAgent:
             "ok": False, "stage": "init", "offer_url": "",
             "selected_specs": [], "error": "", "paid": False,
         }
+        try:
+            require_capability("reorder")
+        except CapabilityError as _ce:
+            out["error"] = f"未获授权: {_ce}"
+            out["stage"] = "auth"
+            return out
         check = validate_reorder_plan(plan)
         if not check["ok"]:
             out["error"] = "；".join(check["reasons"])

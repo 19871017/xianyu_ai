@@ -27,6 +27,7 @@ from typing import Any, Callable
 
 from config import PLATFORM_URLS
 from utils.login_manager import ensure_login
+from license.capability_guard import require_capability, CapabilityError
 
 
 PUBLISH_URL = PLATFORM_URLS["goofishpro"]["publish"]
@@ -419,6 +420,10 @@ class GoofishProLister:
         - mode="shop"  ：鱼小铺多规格模式（需开通鱼小铺）。开通后逐 SKU 建规格/
           深库存；未开通则返回明确提示，不盲填无法验证的表单。
         """
+        try:
+            require_capability("listing")
+        except CapabilityError as _ce:
+            return {"ok": False, "filled": [], "skipped": [], "dry_run": dry_run, "error": f"未获授权: {_ce}"}
         if getattr(self, "mode", "normal") == "shop":
             return self._fill_product_shop(item, dry_run=dry_run)
         return self._fill_product_normal(item, dry_run=dry_run)

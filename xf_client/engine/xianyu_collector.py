@@ -7,6 +7,7 @@ import requests
 from urllib.parse import urlparse, parse_qs
 from DrissionPage import Chromium
 from config import PLATFORM_URLS, IMAGE_DIR
+from license.capability_guard import require_capability
 
 XIANYU_BASE_URL = PLATFORM_URLS['xianyu']['home'].rstrip('/')
 from utils.helpers import ensure_dir, sanitize_filename
@@ -566,6 +567,7 @@ class XianyuCollector:
 
     # ─── 公开接口 ───
     def search_by_keyword(self, keyword: str, count: int = 50) -> list:
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -622,6 +624,7 @@ class XianyuCollector:
             self._close_browser()
 
     def collect_by_homepage(self, homepage_url: str, count: int = 50) -> list:
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -676,6 +679,7 @@ class XianyuCollector:
             self._close_browser()
 
     def collect_by_links(self, links: list[str]) -> list:
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []

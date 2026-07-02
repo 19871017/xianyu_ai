@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 import time
+
+from license.capability_guard import require_capability, CapabilityError
 from typing import Any, Callable
 
 from config import PLATFORM_URLS
@@ -105,6 +107,11 @@ class XianyuListingFetcher:
 
     def fetch_listings(self, max_scroll: int = 10) -> list[dict[str, Any]]:
         """抓取个人在售商品列表，返回规整后的 dict 列表。"""
+        try:
+            require_capability("dashboard")
+        except CapabilityError as _ce:
+            self.log(f"未获授权: {_ce}")
+            return []
         if not self.tab:
             self.log("浏览器未就绪，请先 open()")
             return []

@@ -3,11 +3,11 @@ from sqlalchemy.orm import Session
 from models.database import get_db
 from schemas.license_schema import (
     LicenseActivate, LicenseVerify, LicenseHeartbeat,
-    LicenseIssue, LicenseExtend, LicenseInfo,
+    LicenseIssue, LicenseExtend, LicenseInfo, LicenseCapability,
 )
 from services.license_service import (
     activate_license, verify_license, heartbeat, revoke_license,
-    issue_license, extend_license,
+    issue_license, extend_license, issue_capability,
 )
 from routers.admin import get_current_admin
 from config import CLIENT_API_KEY, REQUIRE_CLIENT_KEY
@@ -54,6 +54,16 @@ def verify(license_key: str, machine_id: str, request: Request, ts: int = None,
 def do_heartbeat(data: LicenseHeartbeat, request: Request, db: Session = Depends(get_db),
                  _=Depends(require_client_key)):
     return heartbeat(db, data, ip=_client_ip(request))
+
+
+@router.post("/capability")
+def capability(data: LicenseCapability, request: Request, db: Session = Depends(get_db),
+               _=Depends(require_client_key)):
+    """签发短期能力令牌：客户端执行受控动作前换取，私钥只在服务端。"""
+    return issue_capability(
+        db, data.license_key, data.machine_id, data.action,
+        ts=data.ts, ip=_client_ip(request),
+    )
 
 
 @router.post("/revoke")

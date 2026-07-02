@@ -11,6 +11,7 @@ from services.audit_service import log_action
 from config import (
     MAX_DEVICES_PER_LICENSE, OFFLINE_THRESHOLD_SECONDS,
     REQUEST_TIMESTAMP_WINDOW_SECONDS, HEARTBEAT_INTERVAL_SECONDS,
+    CAPABILITY_TOKEN_TTL_SECONDS, CAPABILITY_ACTIONS,
 )
 import time
 from datetime import datetime, timedelta
@@ -210,6 +211,58 @@ def verify_license(db: Session, data: LicenseVerify, ip: str = "") -> dict:
         "signature": device_sig,
         "heartbeat_interval": HEARTBEAT_INTERVAL_SECONDS,
     }
+
+
+def issue_capability(db: Session, license_key: str, machine_id: str, action: str,
+                     ts=None, ip: str = "") -> dict:
+    """签发短期能力令牌（方案B）。
+
+    仅当 license/设备均有效时签发；令牌 = RSA(私钥) 对
+    ``cap:action:machine_id:expire_ts`` 的签名。客户端用内嵌公钥验签，
+    破解版拿不到私钥便伪造不出令牌，核心功能因此无法离线绕过。
+    """
+    if not _check_timestamp(ts):
+        return {"ok": False, "reason": "请求时间戳无效"}
+    if action not in CAPABILITY_ACTIONS:
+        return {"ok": False, "reason": "未知能力动作"}
+
+    license_obj = db.query(License).filter(License.license_key == license_key).first()
+    if not license_obj:
+        return {"ok": False, "reason": "License不存在"}
+    if not license_obj.is_active:
+        return {"ok": False, "reason": "License已被吊销"}
+    now = datetime.utcnow()
+    if license_obj.expires_at < now:
+        return {"ok": False, "reason": "License已过期"}
+
+    user = db.query(User).filter(User.id == license_obj.user_id).first()
+    if user and not user.is_active:
+        return {"ok": False, "reason": "账号已被禁用"}
+
+    device = db.query(Device).filter(
+        Device.license_id == license_obj.id,
+        Device.machine_id == machine_id,
+    ).first()
+    if not device:
+        return {"ok": False, "reason": "设备未激活"}
+    if device.force_offline:
+        return {"ok": False, "reason": "该设备已被管理员强制下线"}
+    if not device.is_active:
+        return {"ok": False, "reason": "设备已被解绑"}
+
+    expire_ts = int(time.time()) + CAPABILITY_TOKEN_TTL_SECONDS
+    payload = f"cap:{action}:{machine_id}:{expire_ts}"
+    try:
+        token = sign_data(payload)
+    except Exception as e:
+        logger.error(f"能力令牌签名失败: {e}")
+        return {"ok": False, "reason": "令牌签名失败"}
+
+    device.last_verified = now
+    if ip:
+        device.ip_address = ip
+    db.commit()
+    return {"ok": True, "action": action, "expire_ts": expire_ts, "token": token}
 
 
 def heartbeat(db: Session, data: LicenseHeartbeat, ip: str = "") -> dict:

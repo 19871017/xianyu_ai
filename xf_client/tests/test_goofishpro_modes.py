@@ -18,6 +18,21 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.goofishpro_lister import GoofishProLister
+from license import capability_guard
+
+
+class _AllowValidator:
+    """测试用桩：能力令牌一律放行，使分流/填单纯逻辑可离线单测。"""
+    def acquire_capability(self, action):
+        return {"ok": True, "reason": "test"}
+
+
+def setUpModule():
+    capability_guard.set_validator(_AllowValidator())
+
+
+def tearDownModule():
+    capability_guard.set_validator(None)
 
 
 class TestModeParsing(unittest.TestCase):

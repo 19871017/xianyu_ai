@@ -78,6 +78,32 @@ class ControlFlowTest(unittest.TestCase):
                             headers=self.ckey)
         self.assertTrue(r.json().get("valid"), r.text)
 
+    def test_04c_capability_token_issued_and_verifiable(self):
+        # 方案B：受控动作换取短期签名令牌；用服务端公钥验签，锁定 payload 格式。
+        ts = int(time.time())
+        r = self.client.post("/api/license/capability", headers=self.ckey,
+                             json={"license_key": self.lic, "machine_id": "MACHINE-A",
+                                   "action": "collect", "ts": ts})
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body.get("ok"), body)
+        self.assertGreater(body.get("expire_ts", 0), ts)
+        # 用服务端公钥验签：payload 必须是 cap:action:machine_id:expire_ts。
+        from utils.rsa_utils import verify_signature
+        payload = f"cap:collect:MACHINE-A:{body['expire_ts']}"
+        self.assertTrue(verify_signature(payload, body["token"]))
+        # 篡改动作后同一令牌验签应失败。
+        self.assertFalse(verify_signature(
+            f"cap:listing:MACHINE-A:{body['expire_ts']}", body["token"]))
+
+    def test_04d_capability_unknown_action_rejected(self):
+        ts = int(time.time())
+        r = self.client.post("/api/license/capability", headers=self.ckey,
+                             json={"license_key": self.lic, "machine_id": "MACHINE-A",
+                                   "action": "hack_everything", "ts": ts})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertFalse(r.json().get("ok"))
+
     def test_05_device_limit(self):
         self.client.post("/api/license/activate", headers=self.ckey,
                         json={"license_key": self.lic, "machine_id": "MACHINE-B"})

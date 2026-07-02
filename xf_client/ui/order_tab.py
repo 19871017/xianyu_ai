@@ -160,7 +160,7 @@ class ReorderWorker(QThread):
                 out["error"] = "1688 登录失败"
                 self.finished.emit(out)
                 return
-            out = agent.run_reorder(self.plan)
+            out = agent.prepare_reorder(self.plan)
         except Exception as e:
             out = {"ok": False, "error": str(e)}
         finally:

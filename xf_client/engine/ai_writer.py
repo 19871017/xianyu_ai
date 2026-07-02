@@ -3,6 +3,7 @@ import os
 import sys
 import requests
 from config import AI_API_URL, AI_API_KEY, AI_MODEL
+from license.capability_guard import require_capability, CapabilityError
 
 
 def _get_cert_path():
@@ -66,6 +67,10 @@ class AIWriter:
 
     def rewrite(self, title: str, description: str, price: str = "") -> dict:
         """同步改写（在QThread中直接调用）"""
+        try:
+            require_capability("ai_rewrite")
+        except CapabilityError as _ce:
+            return {"success": False, "error": f"未获授权: {_ce}"}
         self._load_runtime_config()
         self.api_url = (self._runtime_url or AI_API_URL).rstrip("/")
         self.api_key = self._runtime_key or AI_API_KEY

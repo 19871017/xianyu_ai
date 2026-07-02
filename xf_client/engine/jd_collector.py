@@ -14,6 +14,7 @@ import requests
 from engine.jd_sku_parser import parse_jd_sku_list, extract_color_size_from_html
 from DrissionPage import Chromium
 from config import IMAGE_DIR
+from license.capability_guard import require_capability
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.image_dedup import is_valid_product_image
 from utils.browser_config import get_chromium_options, check_browser_available
@@ -513,6 +514,7 @@ class JDCollector:
 
     def search_by_keyword(self, keyword: str, count: int = 50) -> list:
         """关键词搜索采集"""
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -548,6 +550,7 @@ class JDCollector:
 
     def collect_by_link(self, url: str) -> list:
         """单个链接直采"""
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -575,6 +578,7 @@ class JDCollector:
         on_item(index, total, item) 可选回调，便于 UI 实时反馈进度。
         """
         urls = [u for u in (urls or []) if u]
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []

@@ -48,6 +48,12 @@ class MainWindow(QMainWindow):
         # 共享数据 - 从数据库加载
         self.collected_items = self._load_products_from_db()
         self.license_validator = LicenseValidator()
+        # 把 validator 注入能力守卫：engine 核心动作复用同一实例的令牌缓存与登录态。
+        try:
+            from license.capability_guard import set_validator
+            set_validator(self.license_validator)
+        except Exception:
+            pass
         self._license_cache = None
         self._license_cache_ts = 0.0
         self._license_cache_ttl = 30.0  # 秒：避免每次点击都打网络

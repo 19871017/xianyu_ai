@@ -27,6 +27,7 @@ from typing import Any, Callable
 
 from config import PLATFORM_URLS
 from utils.login_manager import ensure_login
+from license.capability_guard import require_capability, CapabilityError
 
 
 PUBLISH_URL = PLATFORM_URLS["xianyu"]["publish"]
@@ -957,6 +958,10 @@ class XianyuLister:
         多 SKU 时取单一售价（闲鱼官方普通发布为单价）。
         dry_run=True 时填完即停（不点「发布」）。
         """
+        try:
+            require_capability("listing")
+        except CapabilityError as _ce:
+            return {"ok": False, "filled": [], "skipped": [], "dry_run": dry_run, "error": f"未获授权: {_ce}"}
         result = {"ok": False, "filled": [], "skipped": [], "dry_run": dry_run, "error": ""}
         if not self.tab:
             result["error"] = "浏览器未就绪，请先 open()"

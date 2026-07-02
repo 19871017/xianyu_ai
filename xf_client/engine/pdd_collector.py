@@ -36,6 +36,7 @@ import random
 import requests as _requests
 from DrissionPage import Chromium
 from config import IMAGE_DIR
+from license.capability_guard import require_capability
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.image_dedup import is_valid_product_image
 from utils.browser_config import get_chromium_options, check_browser_available
@@ -1002,6 +1003,7 @@ class PddCollector:
         Returns:
             标准化商品列表
         """
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -1105,6 +1107,7 @@ class PddCollector:
           https://yangkeduo.com/goods.html?goods_id=xxx
           https://www.pinduoduo.com/goods.html?goods_id=xxx
         """
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []

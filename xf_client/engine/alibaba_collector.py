@@ -24,6 +24,7 @@ import requests
 from urllib.parse import quote
 from DrissionPage import Chromium
 from config import IMAGE_DIR
+from license.capability_guard import require_capability
 from utils.helpers import ensure_dir, sanitize_filename
 from utils.browser_config import get_chromium_options, check_browser_available
 from engine.alibaba_sku_parser import parse_sku_from_html
@@ -1055,6 +1056,7 @@ class AlibabaCollector:
         Returns:
             标准化商品列表
         """
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -1110,6 +1112,7 @@ class AlibabaCollector:
         Returns:
             包含单个商品的列表（或空列表）
         """
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []
@@ -1141,6 +1144,7 @@ class AlibabaCollector:
         on_item(index, total, item) 可选回调，便于 UI 实时反馈进度。
         """
         urls = [u for u in (urls or []) if u]
+        require_capability("collect")
         try:
             self._init_browser()
             self.items = []

@@ -14,7 +14,6 @@ if os.path.exists(env_path):
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 from ui.main_window import MainWindow
-from license.license_validator import LicenseValidator
 from utils.helpers import app_icon_path
 from ui.update_prompt import UpdatePromptManager
 
@@ -27,10 +26,9 @@ def main():
     if icon_path:
         app.setWindowIcon(QIcon(icon_path))
 
-    # License检查
-    validator = LicenseValidator()
-    result = validator.verify()
-
+    # 授权门禁：由 MainWindow 各功能页的 is_licensed()（在线/离线强制验签）
+    # 与 engine 层能力令牌守卫（license.capability_guard）共同把关；
+    # 破解本地授权文件也拿不到服务端签名令牌，核心功能仍不可用。
     window = MainWindow()
     window.show()
 
