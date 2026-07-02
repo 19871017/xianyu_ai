@@ -4,7 +4,7 @@ import requests
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QGroupBox, QMessageBox,
-    QApplication, QComboBox, QFormLayout, QSizePolicy, QCheckBox,
+    QApplication, QComboBox, QGridLayout, QSizePolicy, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QCursor, QFont
@@ -198,20 +198,28 @@ class SettingsTab(QWidget):
         hint.setWordWrap(True)
         api_layout.addWidget(hint)
 
-        # 统一用表单布局，让「API地址 / API Key / 选择模型」三行标签右对齐、输入框左对齐。
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(10)
+        # 用网格布局固定每行高度：QFormLayout 在 macOS 原生风格下、当某行字段是嵌套
+        # 布局（如「选择模型」行）时会算错整表行高，导致标签与输入框重叠。改用 QGridLayout
+        # 后每行高度由控件 minimumHeight 决定，杜绝塌陷。
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setColumnStretch(1, 1)
+
+        def _api_label(text):
+            lb = QLabel(text)
+            lb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            lb.setMinimumHeight(36)
+            return lb
 
         # API地址
         self.api_url_input = QLineEdit()
         self.api_url_input.setPlaceholderText("如: https://api.deepseek.com 或 http://127.0.0.1:3000")
         self.api_url_input.setText(self._ai_config.get("AI_API_URL", ""))
         self.api_url_input.setMinimumHeight(36)
-        form.addRow("API地址:", self.api_url_input)
+        grid.addWidget(_api_label("API地址:"), 0, 0)
+        grid.addWidget(self.api_url_input, 0, 1)
 
         # API Key
         self.api_key_input = QLineEdit()
@@ -219,7 +227,8 @@ class SettingsTab(QWidget):
         self.api_key_input.setPlaceholderText("输入API Key")
         self.api_key_input.setText(self._ai_config.get("AI_API_KEY", ""))
         self.api_key_input.setMinimumHeight(36)
-        form.addRow("API Key:", self.api_key_input)
+        grid.addWidget(_api_label("API Key:"), 1, 0)
+        grid.addWidget(self.api_key_input, 1, 1)
 
         # 选择模型 + 拉取按钮（同一行：左侧下拉框拉伸，右侧拉取按钮）
         model_row = QHBoxLayout()
@@ -244,9 +253,10 @@ class SettingsTab(QWidget):
         )
         self.fetch_models_btn.clicked.connect(self._fetch_models)
         model_row.addWidget(self.fetch_models_btn, 0)
-        form.addRow("选择模型:", model_row)
+        grid.addWidget(_api_label("选择模型:"), 2, 0)
+        grid.addLayout(model_row, 2, 1)
 
-        api_layout.addLayout(form)
+        api_layout.addLayout(grid)
 
         # 保存 + 测试
         btn_layout = QHBoxLayout()
