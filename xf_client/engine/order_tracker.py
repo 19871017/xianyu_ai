@@ -46,6 +46,84 @@ def _amount(value: Any) -> str:
     return m.group(0) if m else ""
 
 
+# 中国大陆手机号（含掩码形式，如 138****1234）。
+_PHONE_RE = re.compile(r"1[3-9]\d{9}")
+_PHONE_MASK_RE = re.compile(r"1[3-9]\d\D{0,2}\**\D{0,2}\d{4}")
+# 常见收货信息标签。
+_NAME_LABELS = ("收货人", "收件人", "联系人", "姓名")
+_PHONE_LABELS = ("手机", "电话", "联系电话", "手机号")
+_ADDR_LABELS = ("收货地址", "收件地址", "详细地址", "地址")
+# 省级行政区（用于无标签时兜底定位地址起点）。
+_PROVINCE_RE = re.compile(
+    r"(北京|天津|上海|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|"
+    r"江西|山东|河南|湖北|湖南|广东|广西|海南|四川|贵州|云南|陕西|甘肃|青海|"
+    r"内蒙古|西藏|宁夏|新疆|香港|澳门|台湾)"
+)
+
+
+def _label_value(text: str, labels) -> str:
+    """从整段文本里按「标签：值」抽取标签对应的值。
+
+    容忍中英文冒号、标签后紧跟空白，值截到行尾或下一个明显标签前。
+    """
+    if not text:
+        return ""
+    for lab in labels:
+        # 标签 + 冒号(可选) + 值，值取到换行/竖线/下一标签。
+        m = re.search(lab + r"[：:\s]*([^\n\r|；;]+)", text)
+        if m:
+            val = m.group(1).strip()
+            # 去掉值里混入的其它标签词（如"收货人张三手机..."被拆开的残留）。
+            # 按长度降序切分，确保"联系电话"先于"电话"命中，避免残留"联系"。
+            others = sorted(
+                set(_NAME_LABELS + _PHONE_LABELS + _ADDR_LABELS) - {lab},
+                key=len, reverse=True,
+            )
+            for other in others:
+                val = val.split(other)[0].strip()
+            if val:
+                return val
+    return ""
+
+
+def parse_ship_info(text: str) -> dict[str, str]:
+    """从订单详情页可见文本中解析买家收货信息。
+
+    纯文本解析，不依赖具体 DOM 结构，抗页面改版。返回
+    {name, phone, address}，抽不到的字段为空串。
+    """
+    text = str(text or "")
+    name = _label_value(text, _NAME_LABELS)
+    phone = _label_value(text, _PHONE_LABELS)
+    address = _label_value(text, _ADDR_LABELS)
+
+    # 手机号兜底：先精确 11 位，再掩码形式。
+    if not _PHONE_RE.fullmatch(phone.replace(" ", "")):
+        m = _PHONE_RE.search(text)
+        if m:
+            phone = m.group(0)
+        else:
+            mm = _PHONE_MASK_RE.search(text)
+            if mm:
+                phone = mm.group(0).strip()
+
+    # 地址兜底：无标签时从首个省级行政区截取一段。
+    if not address:
+        m = _PROVINCE_RE.search(text)
+        if m:
+            seg = text[m.start():m.start() + 120]
+            address = re.split(r"[\n\r|；;]", seg)[0].strip()
+
+    # 姓名兜底：地址串里若带姓名/手机，剥离出来只留地址。
+    if address:
+        address = _PHONE_RE.sub("", address).strip(" ,，")
+    return {
+        "name": _txt(name, 80),
+        "phone": _txt(phone, 40),
+        "address": _txt(address, 300),
+    }
+
+
 def normalize_order(raw: dict[str, Any]) -> dict[str, Any]:
     """把抓取到的原始订单字段规整为统一结构。"""
     raw = raw or {}
@@ -70,6 +148,7 @@ def normalize_order(raw: dict[str, Any]) -> dict[str, Any]:
         "buyer_address": _txt(raw.get("buyer_address") or raw.get("address") or "", 300),
         "buyer_phone": _txt(raw.get("buyer_phone") or raw.get("phone") or "", 40),
         "order_status": _txt(raw.get("order_status") or raw.get("status") or "pending", 40),
+        "detail_url": _txt(raw.get("detail_url") or raw.get("order_url") or "", 500),
         "raw": raw.get("raw") or {},
     }
     return order
@@ -446,6 +525,13 @@ class GofishproOrderTracker:
           var amt = cell(idxRecv) || cell(idxTotal);
           // 商品图片：优先取该行第一张 img 的 src。
           var img = ''; var im = rows[r].querySelector('img'); if(im) img = im.src||'';
+          // 订单详情链接：取该行首个指向订单详情的 a[href]。
+          var durl = '';
+          var as = rows[r].querySelectorAll('a[href]');
+          for (var a=0;a<as.length;a++){
+            var h = as[a].getAttribute('href')||'';
+            if (h.indexOf('order')>=0 || h.indexOf('detail')>=0){ durl = as[a].href||h; break; }
+          }
           out.push({
             order_id: order_id,
             buyer_name: cell(idxBuyer),
@@ -454,6 +540,7 @@ class GofishproOrderTracker:
             order_amount: amt,
             order_status: cell(idxStatus),
             image: img,
+            detail_url: durl,
             raw: {text: (rows[r].innerText||'').slice(0,300)}
           });
         }
@@ -465,3 +552,99 @@ class GofishproOrderTracker:
         except Exception as e:
             self.log(f"闲管家订单抽取异常: {e}")
             return []
+
+    def fetch_order_address(self, order: dict[str, Any], max_wait: int = 12) -> dict[str, str]:
+        """进订单详情页补抓买家收货信息（列表页不含地址）。
+
+        代采发货前按需调用：优先用订单行携带的 detail_url，其次退回订单页
+        并按订单号定位「详情」入口。取详情页整页可见文本交给 parse_ship_info
+        解析，纯文本路线抗页面改版。返回 {name, phone, address}，抓不到全空串。
+        """
+        empty = {"name": "", "phone": "", "address": ""}
+        if not self.tab:
+            self.log("浏览器未就绪，请先 open()")
+            return empty
+
+        detail_url = (order or {}).get("detail_url") or ""
+        order_id = (order or {}).get("platform_order_id") or (order or {}).get("order_id") or ""
+
+        try:
+            if detail_url:
+                self.tab.get(detail_url)
+            else:
+                # 无直链：回订单页，点该订单号所在行的「详情」入口。
+                list_url = PLATFORM_URLS["goofishpro"].get("orders") or "https://goofish.pro/sale/order/all"
+                self.tab.get(list_url)
+                if order_id:
+                    opened = self._open_detail_by_order_id(order_id, max_wait=max_wait)
+                    if not opened:
+                        self.log(f"未能定位订单 {order_id} 的详情入口")
+                        return empty
+                else:
+                    self.log("订单缺少详情链接与订单号，无法补抓收货地址")
+                    return empty
+        except Exception as e:
+            self.log(f"打开订单详情失败: {e}")
+            return empty
+
+        # 等待详情渲染：出现「收货」「地址」等关键字即停。
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            try:
+                ready = self.tab.run_js(
+                    "var t=document.body.innerText||'';"
+                    "return t.indexOf('收货')>=0 || t.indexOf('收件')>=0 || t.indexOf('地址')>=0;"
+                )
+            except Exception:
+                ready = False
+            if ready:
+                break
+            time.sleep(0.5)
+
+        try:
+            text = self.tab.run_js("return document.body.innerText || '';") or ""
+        except Exception as e:
+            self.log(f"读取订单详情文本失败: {e}")
+            return empty
+
+        info = parse_ship_info(text)
+        if info.get("address"):
+            self.log(f"补抓收货地址成功：{info.get('name','')} / {info.get('address','')[:20]}…")
+        else:
+            self.log("未从详情页解析到收货地址，请人工核对")
+        return info
+
+    def _open_detail_by_order_id(self, order_id: str, max_wait: int = 12) -> bool:
+        """在订单列表页点击指定订单号所在行的「详情/查看」入口。"""
+        # 等表格就绪。
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            try:
+                ready = self.tab.run_js("return !!document.querySelector('table');")
+            except Exception:
+                ready = False
+            if ready:
+                break
+            time.sleep(0.5)
+
+        js = r"""
+        var oid = arguments[0];
+        var rows = document.querySelectorAll('table tbody tr, table tr');
+        for (var r=0;r<rows.length;r++){
+          if ((rows[r].innerText||'').indexOf(oid) < 0) continue;
+          var links = rows[r].querySelectorAll('a, button, span');
+          for (var i=0;i<links.length;i++){
+            var t = (links[i].innerText||'').trim();
+            if (t.indexOf('详情')>=0 || t.indexOf('查看')>=0){ links[i].click(); return true; }
+          }
+          // 无显式入口：点该行首个可跳转的 a。
+          var a = rows[r].querySelector('a[href]');
+          if (a){ a.click(); return true; }
+        }
+        return false;
+        """
+        try:
+            return bool(self.tab.run_js(js, order_id))
+        except Exception as e:
+            self.log(f"定位订单详情入口异常: {e}")
+            return False

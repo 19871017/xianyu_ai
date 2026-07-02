@@ -14,6 +14,7 @@ from engine.order_tracker import (
     match_order_to_product,
     match_sku_for_order,
     build_reorder_plan,
+    parse_ship_info,
 )
 
 
@@ -199,6 +200,49 @@ class TestGofishproRowShape(unittest.TestCase):
         # 空店铺/无订单：normalize 空行不应抛异常。
         self.assertEqual(normalize_order({})["platform_order_id"], "")
 
+
+
+class TestParseShipInfo(unittest.TestCase):
+    def test_labeled_full(self):
+        text = (
+            "订单详情\n"
+            "收货人：张三\n"
+            "手机：13800001111\n"
+            "收货地址：上海市浦东新区世纪大道100号1号楼\n"
+        )
+        info = parse_ship_info(text)
+        self.assertEqual(info["name"], "张三")
+        self.assertEqual(info["phone"], "13800001111")
+        self.assertIn("浦东新区", info["address"])
+
+    def test_alt_labels(self):
+        text = "收件人 李四 联系电话 13712345678 详细地址 广东省深圳市南山区科技园路8号"
+        info = parse_ship_info(text)
+        self.assertEqual(info["name"], "李四")
+        self.assertEqual(info["phone"], "13712345678")
+        self.assertIn("深圳市", info["address"])
+
+    def test_masked_phone(self):
+        text = "收货人：王五\n手机：138****6789\n收货地址：北京市朝阳区建国路1号"
+        info = parse_ship_info(text)
+        self.assertEqual(info["name"], "王五")
+        self.assertIn("138", info["phone"])
+        self.assertIn("6789", info["phone"])
+
+    def test_no_label_province_fallback(self):
+        text = "买家备注 无\n浙江省杭州市西湖区文三路90号\n物流：待发货"
+        info = parse_ship_info(text)
+        self.assertIn("杭州市", info["address"])
+
+    def test_empty(self):
+        info = parse_ship_info("")
+        self.assertEqual(info, {"name": "", "phone": "", "address": ""})
+
+    def test_address_strips_embedded_phone(self):
+        text = "收货地址：13800001111 江苏省南京市玄武区中山路1号"
+        info = parse_ship_info(text)
+        self.assertNotIn("13800001111", info["address"])
+        self.assertIn("南京市", info["address"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

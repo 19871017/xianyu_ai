@@ -105,6 +105,38 @@ class FetchOrdersWorker(QThread):
         })
 
 
+class AddressFetchWorker(QThread):
+    """代采发货前进闲管家订单详情页补抓买家收货地址（列表页不含地址）。"""
+    progress_msg = pyqtSignal(str)
+    finished = pyqtSignal(dict)   # {name, phone, address}
+
+    def __init__(self, order):
+        super().__init__()
+        self.order = order or {}
+
+    def run(self):
+        def log(msg):
+            self.progress_msg.emit(msg)
+
+        tracker = GofishproOrderTracker(on_log=log)
+        opened = False
+        info = {"name": "", "phone": "", "address": ""}
+        try:
+            log("正在打开闲管家订单详情，补抓收货地址…")
+            opened = tracker.open()
+            if not opened:
+                log("闲管家登录失败，无法补抓收货地址")
+                self.finished.emit(info)
+                return
+            info = tracker.fetch_order_address(self.order)
+        except Exception as e:
+            log(f"补抓收货地址异常：{e}")
+        finally:
+            if opened:
+                tracker.close()
+        self.finished.emit(info)
+
+
 class ReorderWorker(QThread):
     """对单条订单执行半自动代采（停在确认页，绝不支付）。"""
     progress_msg = pyqtSignal(str)
@@ -330,6 +362,68 @@ class OrderTab(QWidget):
             QMessageBox.warning(self, "无法代采", "该订单未匹配到源商品，无法代采。")
             return
 
+        od = row["order"]
+        # 闲管家订单列表页不含收货地址；代采校验又把地址/收货人当硬门槛。
+        # 若计划里地址为空且能定位订单详情，先进详情页补抓一次再校验。
+        ship = plan.get("ship_to") or {}
+        need_addr = not (ship.get("address") or "").strip()
+        can_fetch = bool((od.get("detail_url") or "").strip() or (od.get("platform_order_id") or "").strip())
+        if need_addr and can_fetch:
+            self._pending_reorder = {"idx": idx, "plan": plan, "row": row}
+            self.reorder_btn.setEnabled(False)
+            self.fetch_btn.setEnabled(False)
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 0)
+            self._append_log("收货地址缺失，先进闲管家订单详情补抓…")
+            self.addr_worker = AddressFetchWorker(od)
+            self.addr_worker.progress_msg.connect(self._append_log)
+            self.addr_worker.finished.connect(self._on_address_fetched)
+            self.addr_worker.start()
+            return
+
+        self._confirm_and_launch_reorder(idx, plan, row)
+
+    def _on_address_fetched(self, info: dict):
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setRange(0, 100)
+        self.reorder_btn.setEnabled(True)
+        self.fetch_btn.setEnabled(True)
+        pending = getattr(self, "_pending_reorder", None)
+        self._pending_reorder = None
+        if not pending:
+            return
+        idx, plan, row = pending["idx"], pending["plan"], pending["row"]
+        info = info or {}
+        addr = (info.get("address") or "").strip()
+        if addr:
+            ship = plan.setdefault("ship_to", {})
+            ship["address"] = addr
+            if info.get("name"):
+                ship["name"] = info["name"]
+            if info.get("phone"):
+                ship["phone"] = info["phone"]
+            # 同步回订单与本地库，便于追溯。
+            od = row["order"]
+            od["buyer_address"] = addr
+            if info.get("name"):
+                od["buyer_name"] = od.get("buyer_name") or info["name"]
+            if info.get("phone"):
+                od["buyer_phone"] = info["phone"]
+            try:
+                db.save_order({
+                    "platform_order_id": od.get("platform_order_id", ""),
+                    "platform": "xianyu",
+                    "buyer_name": od.get("buyer_name", ""),
+                    "buyer_phone": od.get("buyer_phone", ""),
+                    "buyer_address": addr,
+                })
+            except Exception as e:
+                self._append_log(f"收货地址落库失败：{e}")
+        else:
+            self._append_log("未能补抓到收货地址，请到浏览器人工核对后再代采。")
+        self._confirm_and_launch_reorder(idx, plan, row)
+
+    def _confirm_and_launch_reorder(self, idx, plan, row):
         check = validate_reorder_plan(plan)
         if not check["ok"]:
             QMessageBox.warning(
