@@ -134,6 +134,10 @@ SPEC_NAME_MAP = {
 }
 SPEC_VALUE_MAXLEN = 12  # 闲鱼发布页「规格值最大长度为12个字」
 
+# 闲鱼发布页校验：库存只能 0-10000。源端（1688 等）库存常达几万，需 clamp。
+STOCK_MAX = 10000
+STOCK_DEFAULT = 100  # 缺失/无效库存时的默认可售数
+
 
 class XianyuLister:
     """闲鱼官方商品上架器（默认 dry-run，停在「发布」前）。"""
@@ -395,6 +399,47 @@ class XianyuLister:
     def _norm_spec(value: str) -> str:
         """规格值归一：去首尾空白并截断到闲鱼可接受长度。"""
         return (str(value or "").strip())[:SPEC_VALUE_MAXLEN]
+
+    @staticmethod
+    def _clamp_stock(stock: Any, default: int = STOCK_DEFAULT) -> int:
+        """把采集库存夹到闲鱼允许的 0-10000。
+
+        闲鱼发布页校验「库存只能 0-10000」，而 1688 等源端库存常达几万甚至
+        几十万，原样填入会被拦。这里超上限一律截为 10000；无效/缺失时用默认值。
+        """
+        try:
+            n = int(float(str(stock).replace(",", "").strip()))
+        except Exception:
+            return default
+        if n < 0:
+            return 0
+        if n > STOCK_MAX:
+            return STOCK_MAX
+        return n
+
+    @staticmethod
+    def _pad_axis_values(values: list[str]) -> tuple[list[str], set[str]]:
+        """把规格轴补齐到至少 2 个值（闲鱼「规格值最少填 2 个」校验）。
+
+        源端某轴只有 1 个值（如只有单一颜色）时，闲鱼发布会被
+        「规格最少填写2种」拦下。这里补一个占位值凑够 2 个，占位值不会匹配
+        任何真实 SKU，后续会被当作「空缺组合」填库存 0（不可售），既过校验又
+        不会误卖。返回 (补齐后的值列表, 占位值集合)。
+        """
+        vals = [v for v in values if str(v or "").strip()]
+        if len(vals) >= 2:
+            return vals, set()
+        pad_candidates = ["其它", "备用", "默认2"]
+        for cand in pad_candidates:
+            if cand not in vals:
+                return vals + [cand], {cand}
+        # 极端情况下候选都撞了，用带序号的占位。
+        idx = 2
+        while True:
+            cand = f"规格{idx}"
+            if cand not in vals:
+                return vals + [cand], {cand}
+            idx += 1
 
     @staticmethod
     def _strip_emoji(text: str) -> str:
@@ -694,6 +739,12 @@ class XianyuLister:
         if not v1:
             out["note"] = "无有效规格值，已跳过多规格。"
             return out
+        # 闲鱼校验「规格值最少填 2 个」：源端某轴仅 1 个值时补占位值凑够 2 个。
+        # 占位值不匹配任何真实 SKU，后续按空缺组合填库存 0（不可售），既过校验
+        # 又不会误卖。
+        v1, _pad1 = self._pad_axis_values(v1)
+        if v2:
+            v2, _pad2 = self._pad_axis_values(v2)
         # 原始类型名（最权威）：优先用它映射闲鱼固定类型，反推仅作兜底。
         name1, name2 = self._spec_axis_names(sku_list)
 
@@ -753,9 +804,13 @@ class XianyuLister:
                 sku = sku_index.get((key[0], ""))
             if sku:
                 price = float(sku.get("price") or 0)
-                stock = sku.get("stock") or ""
+                stock = sku.get("stock")
                 price_str = f"{price:.2f}" if price else ""
-                stock_str = str(int(stock)) if str(stock).strip() else ""
+                # 闲鱼库存只能 0-10000：clamp 源端库存；缺失时给默认可售数。
+                if str(stock).strip():
+                    stock_str = str(self._clamp_stock(stock))
+                else:
+                    stock_str = str(STOCK_DEFAULT)
                 if not price_str:
                     # 真实组合但缺价：用同色兜底价，避免留空被拦。
                     bp = axis1_price.get(key[0], fallback_price)

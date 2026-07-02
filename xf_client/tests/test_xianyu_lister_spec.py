@@ -99,3 +99,44 @@ class TestStripEmoji(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestClampStock(unittest.TestCase):
+    def test_within_range(self):
+        self.assertEqual(XianyuLister._clamp_stock(500), 500)
+        self.assertEqual(XianyuLister._clamp_stock("888"), 888)
+
+    def test_over_max_clamped(self):
+        self.assertEqual(XianyuLister._clamp_stock(99999), 10000)
+        self.assertEqual(XianyuLister._clamp_stock("123456"), 10000)
+        self.assertEqual(XianyuLister._clamp_stock("12,345"), 10000)
+
+    def test_negative_to_zero(self):
+        self.assertEqual(XianyuLister._clamp_stock(-5), 0)
+
+    def test_invalid_uses_default(self):
+        self.assertEqual(XianyuLister._clamp_stock(""), 100)
+        self.assertEqual(XianyuLister._clamp_stock(None), 100)
+        self.assertEqual(XianyuLister._clamp_stock("abc"), 100)
+
+    def test_float_string(self):
+        self.assertEqual(XianyuLister._clamp_stock("10000.0"), 10000)
+
+
+class TestPadAxisValues(unittest.TestCase):
+    def test_already_two_no_pad(self):
+        vals, pads = XianyuLister._pad_axis_values(["红色", "蓝色"])
+        self.assertEqual(vals, ["红色", "蓝色"])
+        self.assertEqual(pads, set())
+
+    def test_single_padded_to_two(self):
+        vals, pads = XianyuLister._pad_axis_values(["红色"])
+        self.assertEqual(len(vals), 2)
+        self.assertEqual(vals[0], "红色")
+        self.assertEqual(len(pads), 1)
+        self.assertIn(vals[1], pads)
+
+    def test_pad_avoids_collision(self):
+        vals, pads = XianyuLister._pad_axis_values(["其它"])
+        self.assertEqual(len(vals), 2)
+        self.assertNotEqual(vals[0], vals[1])
