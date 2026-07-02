@@ -29,15 +29,24 @@ def timestamp_str() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def resource_path(relative: str) -> str:
-    """返回资源文件的绝对路径，兼容开发态与 PyInstaller 冻结态。
+def _bundle_base() -> str:
+    """返回数据文件所在根目录，兼容三种运行形态：
 
-    冻结态下数据文件被解包到 sys._MEIPASS（onedir/onefile 均适用）。
+    - PyInstaller 冻结态：数据解包到 ``sys._MEIPASS``（onedir/onefile 均适用）。
+    - Nuitka 编译态：无 ``sys._MEIPASS``；standalone/onefile 下编译模块的
+      ``__file__`` 指向 dist（或 onefile 解包目录）内的真实路径，
+      故从本模块 ``__file__`` 上溯两级即为随包数据根目录。
+    - 源码运行：同样从 ``__file__`` 上溯两级到项目根。
     """
     base = getattr(sys, "_MEIPASS", None)
-    if not base:
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, relative)
+    if base:
+        return base
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def resource_path(relative: str) -> str:
+    """返回资源文件的绝对路径，兼容开发态 / PyInstaller / Nuitka。"""
+    return os.path.join(_bundle_base(), relative)
 
 
 def app_icon_path() -> str:

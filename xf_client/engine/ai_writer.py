@@ -7,19 +7,22 @@ from license.capability_guard import require_capability, CapabilityError
 
 
 def _get_cert_path():
-    """获取SSL证书路径（兼容PyInstaller打包）"""
-    if getattr(sys, 'frozen', False):
-        # PyInstaller打包后的路径
-        base_path = sys._MEIPASS
-        cert_path = os.path.join(base_path, 'certifi', 'cacert.pem')
+    """获取SSL证书路径（兼容 PyInstaller / Nuitka / 源码运行）。"""
+    # PyInstaller 冻结态：证书随包解包到 sys._MEIPASS/certifi。
+    base_path = getattr(sys, "_MEIPASS", None)
+    if base_path:
+        cert_path = os.path.join(base_path, "certifi", "cacert.pem")
         if os.path.exists(cert_path):
             return cert_path
-    # 开发环境
+    # Nuitka 编译态 / 源码运行：certifi 作为普通包随行，直接用其 where()。
     try:
         import certifi
-        return certifi.where()
-    except:
-        return None
+        cert_path = certifi.where()
+        if cert_path and os.path.exists(cert_path):
+            return cert_path
+    except Exception:
+        pass
+    return None
 
 
 class AIWriter:

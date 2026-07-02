@@ -26,6 +26,9 @@ API_AUTH_LOGIN       = f"{SERVER_BASE_URL}/api/auth/login"
 API_LICENSE_HEARTBEAT = f"{SERVER_BASE_URL}/api/license/heartbeat"
 # 能力令牌（方案B）：执行采集/上架/AI改写等受控动作前换取的短期签名令牌端点。
 API_LICENSE_CAPABILITY = f"{SERVER_BASE_URL}/api/license/capability"
+# 服务端计算接口（防逆向样板）：核心算法只在云端，客户端用 license 换短期计算令牌后调用。
+API_COMPUTE_TOKEN        = f"{SERVER_BASE_URL}/api/compute/token"
+API_COMPUTE_PROFIT_SCORE = f"{SERVER_BASE_URL}/api/compute/profit_score"
 # 公开更新检测：返回某平台最新版本（无需登录态）。platform=mac/win。
 API_PUBLIC_LATEST    = f"{SERVER_BASE_URL}/api/public/latest"
 # 下载站首页：客户端检测到新版本后，点「确定」跳转此处下载。

@@ -1,4 +1,4 @@
-"""利润测算 + 选品打分 回归测试。
+"""利润测算 + 选品打分 回归测试（算法已服务端化，测试随算法迁到服务端）。
 
 全部为纯逻辑测试，注入固定输入，离线可重复。
 """
@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from engine.profit_score import (
+from services.profit_score import (
     compute_profit, score_product, rank_products,
 )
 

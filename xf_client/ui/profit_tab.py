@@ -1,6 +1,7 @@
 """选品打分 Tab：对本地库商品做利润测算 + 综合打分排序，辅助上架决策。
 
-数据来自本地库，纯逻辑计算（engine.profit_score），打开即算、无需联网。
+打分算法在服务端执行（engine.compute_client 调用云端接口），客户端不持有算法
+源码，逆向本程序也拿不到实现。数据来自本地库，需联网 + 有效授权才能测算。
 可调成本参数（运费 / 平台费率 / 其它成本）实时重算，亏损商品标红预警。
 """
 from PyQt6.QtWidgets import (
@@ -11,7 +12,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor, QBrush
 
-from engine.profit_score import rank_products
+from engine.compute_client import ComputeClient, ComputeError
 from database.db_manager import db
 
 
@@ -30,6 +31,7 @@ class ProfitTab(QWidget):
         super().__init__()
         self.main_window = main_window
         self.ranked = []
+        self._compute = ComputeClient(main_window.license_validator)
         self._setup_ui()
         self.refresh_items(None)
 
@@ -121,20 +123,34 @@ class ProfitTab(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.table)
 
-    # 主窗口刷新接口；items 不使用，数据自库中取并重算。
+    # 主窗口刷新接口；items 不使用，数据自库中取，打分由服务端计算。
     def refresh_items(self, items=None):
         try:
             products = db.get_all_products()
         except Exception:
             products = []
-        self.ranked = rank_products(
-            products,
-            shipping_cost=self.ship_spin.value(),
-            platform_fee_pct=self.fee_spin.value(),
-            extra_cost=self.extra_spin.value(),
-            target_markup_pct=self.target_spin.value(),
-        )
+        if not products:
+            self.ranked = []
+            self._fill_table()
+            return
+        try:
+            self.ranked = self._compute.rank_products(
+                products,
+                shipping_cost=self.ship_spin.value(),
+                platform_fee_pct=self.fee_spin.value(),
+                extra_cost=self.extra_spin.value(),
+                target_markup_pct=self.target_spin.value(),
+            )
+        except ComputeError as e:
+            self.ranked = []
+            self._show_compute_error(str(e))
+            self._fill_table()
+            return
         self._fill_table()
+
+    def _show_compute_error(self, msg: str):
+        self.summary_label.setText(f"⚠️ 选品打分需联网授权：{msg}")
+        self.summary_label.setStyleSheet("color:#c62828;")
 
     def _visible_rows(self):
         mode = self.filter_combo.currentIndex()

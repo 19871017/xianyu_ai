@@ -9,6 +9,7 @@ from routers.auth import router as auth_router
 from routers.license_api import router as license_router
 from routers.admin import router as admin_router
 from routers.release_api import router as release_router
+from routers.compute_api import router as compute_router
 from utils.rsa_utils import ensure_keys
 import config
 import os
@@ -63,6 +64,7 @@ app.include_router(auth_router)
 app.include_router(license_router)
 app.include_router(admin_router)
 app.include_router(release_router)
+app.include_router(compute_router)
 
 
 @app.get("/admin")
